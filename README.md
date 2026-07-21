@@ -1,5 +1,3 @@
-# OpenRF Platform
-
 <p align="center">
   <img src="assets/openrf-platform-logo.svg" width="320" alt="OpenRF Platform Logo">
 </p>
@@ -313,7 +311,7 @@ See the [LICENSE](LICENSE) file for details.
 
 # Credits
 
-Created and maintained by **Kocsis Krisztián**
+Created and maintained by **Krisztián Kocsis**
 
 Architecture, design discussions and documentation support by **ChatGPT (OpenAI)**
 
