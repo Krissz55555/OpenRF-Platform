@@ -16,7 +16,7 @@ RF Gateway • RF Analyzer • Home Assistant • MQTT • REST API • OTA
 
 ---
 
-**Current release: v1.1.0 — Analyzer v2 Final**
+**Current stable release: v1.1.0**
 
 OpenRF Platform is a modern, modular RF platform built for ESP8266 devices equipped with a CC1101 transceiver.
 
@@ -25,6 +25,20 @@ Rather than focusing on supporting a limited number of remote controls, OpenRF P
 The project is designed around one simple principle:
 
 > **Keep the platform stable while allowing RF protocols to evolve independently.**
+
+---
+
+## RF Analyzer
+
+The RF Analyzer is one of the key technologies behind OpenRF Platform.
+
+Its primary purpose is not simply to display RF signals, but to provide a structured and repeatable workflow for understanding unknown radio transmissions before protocol support is implemented.
+
+Instead of relying on assumptions or device-specific hacks, every new RF protocol begins with signal analysis. The Analyzer provides the tools required to capture, compare, validate and classify RF transmissions, allowing new protocol support to be developed using measurable and reproducible data.
+
+This approach separates protocol development from the core platform, keeping the firmware stable while enabling continuous expansion of supported devices.
+
+As OpenRF Platform evolves, the Analyzer will remain the foundation for integrating new remote controls, wireless switches, sensors, weather stations and other RF devices through a consistent engineering-driven development process.
 
 ---
 
