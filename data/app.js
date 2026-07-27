@@ -4,7 +4,7 @@ const elements = {
   radioChip: $("radioChip"), radioMode: $("radioMode"), radioFrequency: $("radioFrequency"), radioRssi: $("radioRssi"), mqttStatus: $("mqttStatus"), freeHeap: $("freeHeap"), heapFragmentation: $("heapFragmentation"), uptime: $("uptime"),
   rawPulseCount: $("rawPulseCount"), rawDuration: $("rawDuration"), rawRssi: $("rawRssi"), rawSequence: $("rawSequence"), rawAge: $("rawAge"), rawPreview: $("rawPreview"),
   refreshStatusButton: $("refreshStatusButton"), settingsForm: $("settingsForm"), hostname: $("hostname"), replayCount: $("replayCount"), wifiSsid: $("wifiSsid"), wifiPassword: $("wifiPassword"), wifiPasswordState: $("wifiPasswordState"), mqttEnabled: $("mqttEnabled"), mqttFields: $("mqttFields"), mqttHost: $("mqttHost"), mqttPort: $("mqttPort"), mqttUser: $("mqttUser"), mqttPassword: $("mqttPassword"), homeAssistantDiscovery: $("homeAssistantDiscovery"), passwordState: $("passwordState"), saveMessage: $("saveMessage"), saveButton: $("saveButton"),
-  analyzerSequence: $("analyzerSequence"), analyzerBadge: $("analyzerBadge"), analyzerFrequency: $("analyzerFrequency"), analyzerRssi: $("analyzerRssi"), analyzerProtocol: $("analyzerProtocol"), analyzerEncoding: $("analyzerEncoding"), analyzerBits: $("analyzerBits"), analyzerBasePulse: $("analyzerBasePulse"), analyzerFrameCount: $("analyzerFrameCount"), analyzerQuality: $("analyzerQuality"), analyzerPulseCount: $("analyzerPulseCount"), analyzerDuration: $("analyzerDuration"), analyzerCode: $("analyzerCode"), analyzerClasses: $("analyzerClasses"), analyzerCandidates: $("analyzerCandidates"), analyzerAccepted: $("analyzerAccepted"), analyzerRejected: $("analyzerRejected"), analyzerDecoded: $("analyzerDecoded"), analyzerUnknown: $("analyzerUnknown"), analyzerDetailTitle: $("analyzerDetailTitle"), analyzerAge: $("analyzerAge"), analyzerBitstream: $("analyzerBitstream"), refreshAnalyzerButton: $("refreshAnalyzerButton"), copyAnalyzerButton: $("copyAnalyzerButton"),
+  analyzerSequence: $("analyzerSequence"), analyzerBadge: $("analyzerBadge"), analyzerFrequency: $("analyzerFrequency"), analyzerRssi: $("analyzerRssi"), analyzerProtocol: $("analyzerProtocol"), analyzerEncoding: $("analyzerEncoding"), analyzerBits: $("analyzerBits"), analyzerBasePulse: $("analyzerBasePulse"), analyzerFrameCount: $("analyzerFrameCount"), analyzerQuality: $("analyzerQuality"), analyzerPulseCount: $("analyzerPulseCount"), analyzerDuration: $("analyzerDuration"), analyzerCode: $("analyzerCode"), analyzerClasses: $("analyzerClasses"), analyzerCandidates: $("analyzerCandidates"), analyzerAccepted: $("analyzerAccepted"), analyzerRejected: $("analyzerRejected"), analyzerDecoded: $("analyzerDecoded"), analyzerUnknown: $("analyzerUnknown"), analyzerDetailTitle: $("analyzerDetailTitle"), analyzerAge: $("analyzerAge"), analyzerBitstream: $("analyzerBitstream"), refreshAnalyzerButton: $("refreshAnalyzerButton"), copyAnalyzerButton: $("copyAnalyzerButton"), analyzerRssiThreshold: $("analyzerRssiThreshold"), analyzerRssiThresholdValue: $("analyzerRssiThresholdValue"), analyzerRssiSaveState: $("analyzerRssiSaveState"), analyzerCurrentRssi: $("analyzerCurrentRssi"), analyzerPeakRssi: $("analyzerPeakRssi"), analyzerWeakRssi: $("analyzerWeakRssi"), analyzerMinPulses: $("analyzerMinPulses"), analyzerMinPulsesValue: $("analyzerMinPulsesValue"), analyzerMinDuration: $("analyzerMinDuration"), analyzerMinDurationValue: $("analyzerMinDurationValue"), analyzerSimilarity: $("analyzerSimilarity"), analyzerSimilarityValue: $("analyzerSimilarityValue"), analyzerOccurrences: $("analyzerOccurrences"), analyzerOccurrencesValue: $("analyzerOccurrencesValue"), analyzerShowRejected: $("analyzerShowRejected"), analyzerFreezeCandidate: $("analyzerFreezeCandidate"), analyzerAlternation: $("analyzerAlternation"), analyzerAlternationValue: $("analyzerAlternationValue"), analyzerDeveloperMode: $("analyzerDeveloperMode"), developerModeState: $("developerModeState"), candidateDeveloperMetrics: $("candidateDeveloperMetrics"), candidateAlternation: $("candidateAlternation"), candidateSamePairs: $("candidateSamePairs"), candidateLongestRun: $("candidateLongestRun"), candidateNormalizedCount: $("candidateNormalizedCount"), candidateNormalizedRaw: $("candidateNormalizedRaw"), candidateSequence: $("candidateSequence"), candidateAge: $("candidateAge"), candidateRssi: $("candidateRssi"), candidatePulseCount: $("candidatePulseCount"), candidateDuration: $("candidateDuration"), candidateRejectReason: $("candidateRejectReason"), candidateRaw: $("candidateRaw"),
   learnState: $("learnState"), learnBadge: $("learnBadge"), learnMessage: $("learnMessage"), learnStartButton: $("learnStartButton"), learnAcceptButton: $("learnAcceptButton"), learnSaveButton: $("learnSaveButton"), learnTestSendButton: $("learnTestSendButton"), learnDiscardButton: $("learnDiscardButton"), learnPulseCount: $("learnPulseCount"), learnDuration: $("learnDuration"), learnRssi: $("learnRssi"), learnNoiseFloor: $("learnNoiseFloor"), learnRejected: $("learnRejected"), learnRejectReason: $("learnRejectReason"), learnPreviewTitle: $("learnPreviewTitle"), learnRawPreview: $("learnRawPreview"),
   refreshSlotsButton: $("refreshSlotsButton"), slotUsage: $("slotUsage"), slotMessage: $("slotMessage"), slotGrid: $("slotGrid"),
   refreshRxSlotsButton: $("refreshRxSlotsButton"), rxSlotUsage: $("rxSlotUsage"), rxSlotMessage: $("rxSlotMessage"), rxSlotGrid: $("rxSlotGrid"),
@@ -84,6 +84,62 @@ async function loadStatus() {
 async function loadRawFrame() { try { const d = await requestJson("/api/radio/raw"); if (!d.available) return; elements.rawPulseCount.textContent = `${d.pulse_count} pulses`; elements.rawDuration.textContent = `${(Number(d.duration_us) / 1000).toFixed(2)} ms`; elements.rawRssi.textContent = `${Number(d.rssi_dbm).toFixed(1)} dBm`; elements.rawSequence.textContent = `RAW frame #${d.sequence}`; elements.rawAge.textContent = formatAge(Number(d.age_ms)); const raw = Array.isArray(d.raw) ? d.raw : []; const preview = raw.slice(0, 160).join(", "); elements.rawPreview.textContent = raw.length > 160 ? `${preview}\n\n… ${raw.length - 160} more pulses` : preview; } catch (e) { console.error(e); } }
 
 
+let analyzerSettingsSaveTimer = null;
+let analyzerSettingsEditing = false;
+
+function renderAnalyzerControls() {
+  const rssi = Number(elements.analyzerRssiThreshold?.value);
+  const pulses = Number(elements.analyzerMinPulses?.value);
+  const duration = Number(elements.analyzerMinDuration?.value);
+  const similarity = Number(elements.analyzerSimilarity?.value);
+  const occurrences = Number(elements.analyzerOccurrences?.value);
+  const alternation = Number(elements.analyzerAlternation?.value);
+  if (Number.isFinite(rssi)) elements.analyzerRssiThresholdValue.textContent = `${rssi} dBm`;
+  if (Number.isFinite(pulses)) elements.analyzerMinPulsesValue.textContent = String(pulses);
+  if (Number.isFinite(duration)) elements.analyzerMinDurationValue.textContent = `${(duration / 1000).toFixed(1)} ms`;
+  if (Number.isFinite(similarity)) elements.analyzerSimilarityValue.textContent = `${similarity}%`;
+  if (Number.isFinite(occurrences)) elements.analyzerOccurrencesValue.textContent = String(occurrences);
+  if (Number.isFinite(alternation)) elements.analyzerAlternationValue.textContent = `${alternation}%`;
+  const developerOn = !!elements.analyzerDeveloperMode?.checked;
+  if (elements.developerModeState) elements.developerModeState.textContent = developerOn ? "ON" : "OFF";
+  if (elements.candidateDeveloperMetrics) elements.candidateDeveloperMetrics.hidden = !developerOn;
+  document.querySelectorAll(".developer-setting, .developer-only").forEach(el => { el.hidden = !developerOn; });
+}
+
+async function saveAnalyzerSettings() {
+  elements.analyzerRssiSaveState.textContent = "Saving...";
+  elements.analyzerRssiSaveState.className = "form-message";
+  try {
+    await postJson("/api/analyzer/settings", {
+      min_rssi: Number(elements.analyzerRssiThreshold.value),
+      min_pulse_count: Number(elements.analyzerMinPulses.value),
+      min_duration_us: Number(elements.analyzerMinDuration.value),
+      similarity: Number(elements.analyzerSimilarity.value),
+      occurrences: Number(elements.analyzerOccurrences.value),
+      show_rejected: elements.analyzerShowRejected.checked,
+      freeze_candidate: elements.analyzerFreezeCandidate.checked,
+      alternation_tolerance: Number(elements.analyzerAlternation.value),
+      developer_mode: elements.analyzerDeveloperMode.checked
+    });
+    elements.analyzerRssiSaveState.textContent = "Saved";
+    elements.analyzerRssiSaveState.className = "form-message success";
+  } catch (error) {
+    elements.analyzerRssiSaveState.textContent = error.message;
+    elements.analyzerRssiSaveState.className = "form-message error";
+  }
+}
+
+function queueAnalyzerSettingsSave() {
+  analyzerSettingsEditing = true;
+  renderAnalyzerControls();
+  elements.analyzerRssiSaveState.textContent = "Release to save";
+  window.clearTimeout(analyzerSettingsSaveTimer);
+  analyzerSettingsSaveTimer = window.setTimeout(async () => {
+    await saveAnalyzerSettings();
+    analyzerSettingsEditing = false;
+  }, 450);
+}
+
 async function loadAnalyzer() {
   if (!elements.analyzerSequence) return;
   try {
@@ -93,6 +149,42 @@ async function loadAnalyzer() {
     elements.analyzerRejected.textContent = d.rejected_frames || 0;
     elements.analyzerDecoded.textContent = d.decoded_frames || 0;
     elements.analyzerUnknown.textContent = d.unknown_frames || 0;
+    elements.analyzerWeakRssi.textContent = d.weak_rssi_frames || 0;
+    elements.analyzerCurrentRssi.textContent = Number.isFinite(Number(d.current_rssi_dbm)) ? `${Number(d.current_rssi_dbm).toFixed(1)} dBm` : "-";
+    elements.analyzerPeakRssi.textContent = Number(d.peak_rssi_dbm) > -127 ? `${Number(d.peak_rssi_dbm).toFixed(1)} dBm` : "-";
+    if (!analyzerSettingsEditing) {
+      if (Number.isFinite(Number(d.analyzer_min_rssi))) elements.analyzerRssiThreshold.value = String(d.analyzer_min_rssi);
+      if (Number.isFinite(Number(d.analyzer_min_pulse_count))) elements.analyzerMinPulses.value = String(d.analyzer_min_pulse_count);
+      if (Number.isFinite(Number(d.analyzer_min_duration_us))) elements.analyzerMinDuration.value = String(d.analyzer_min_duration_us);
+      if (Number.isFinite(Number(d.analyzer_similarity))) elements.analyzerSimilarity.value = String(d.analyzer_similarity);
+      if (Number.isFinite(Number(d.analyzer_occurrences))) elements.analyzerOccurrences.value = String(d.analyzer_occurrences);
+      elements.analyzerShowRejected.checked = !!d.analyzer_show_rejected;
+      elements.analyzerFreezeCandidate.checked = !!d.analyzer_freeze_candidate;
+      if (Number.isFinite(Number(d.analyzer_alternation_tolerance))) elements.analyzerAlternation.value = String(d.analyzer_alternation_tolerance);
+      elements.analyzerDeveloperMode.checked = !!d.analyzer_developer_mode;
+      renderAnalyzerControls();
+    }
+    const c = d.last_candidate || {};
+    if (c.available) {
+      elements.candidateSequence.textContent = `Candidate #${c.sequence}`;
+      elements.candidateAge.textContent = formatAge(Number(c.age_ms));
+      elements.candidateRssi.textContent = `${Number(c.rssi_dbm).toFixed(1)} dBm`;
+      elements.candidatePulseCount.textContent = `${c.pulse_count || 0} pulses`;
+      elements.candidateDuration.textContent = `${(Number(c.duration_us || 0) / 1000).toFixed(2)} ms`;
+      elements.candidateRejectReason.textContent = c.reject_reason || "-";
+      elements.candidateAlternation.textContent = `${c.alternation_ratio || 0}%`;
+      elements.candidateSamePairs.textContent = String(c.same_sign_pairs || 0);
+      elements.candidateLongestRun.textContent = String(c.longest_same_sign_run || 0);
+      elements.candidateNormalizedCount.textContent = `${c.normalized_pulse_count || 0} pulses`;
+      const normalizedRaw = Array.isArray(c.normalized_pulses_us) ? c.normalized_pulses_us : [];
+      elements.candidateNormalizedRaw.textContent = `Normalized signed pulse sequence (µs):\n${normalizedRaw.join(", ")}`;
+      const candidateRaw = Array.isArray(c.raw_pulses_us) ? c.raw_pulses_us : [];
+      elements.candidateRaw.textContent = `Frequency: ${Number(c.frequency_mhz).toFixed(3)} MHz
+Pulse min / max: ${c.min_pulse_us || 0} / ${c.max_pulse_us || 0} µs
+RAW signed pulse sequence (µs):
+${candidateRaw.join(", ")}${c.raw_truncated ? `
+… preview truncated after ${candidateRaw.length} pulses` : ""}`;
+    }
     if (!d.available) return;
     elements.analyzerSequence.textContent = `Frame #${d.sequence}`;
     elements.analyzerBadge.textContent = d.status || "Unknown";
@@ -115,7 +207,8 @@ async function loadAnalyzer() {
     const raw = Array.isArray(d.raw_pulses_us) ? d.raw_pulses_us : [];
     const rawText = raw.length ? raw.join(", ") + (d.raw_truncated ? `\n… preview truncated after ${raw.length} pulses` : "") : "No RAW pulse data.";
     const decodedText = d.bitstream ? `Decoded bitstream: ${d.bitstream}\n\n` : "";
-    elements.analyzerBitstream.textContent = `${decodedText}Protocol: ${d.protocol || "Unknown"}
+    const structuredText = d.structured_signal ? `Structured signal: yes\nOccurrences: ${d.occurrences || 0}\nSimilarity: ${d.similarity || 0}%\n\n` : "";
+    elements.analyzerBitstream.textContent = `${decodedText}${structuredText}Protocol: ${d.protocol || "Unknown"}
 Encoding guess: ${d.encoding || "Unknown"}
 Status: ${reason}
 Frequency: ${Number(d.frequency_mhz).toFixed(3)} MHz
@@ -411,6 +504,13 @@ async function restoreBackup() {
 document.addEventListener("DOMContentLoaded", () => {
   document.querySelectorAll(".tab-button").forEach(button => button.addEventListener("click", () => { const page = button.dataset.page; if (page !== "rxslots" && rxLearnPollTimer) stopRxLearnPolling(); showPage(page); if (page === "settings") loadConfig(); if (page === "learn") loadLearnStatus(); if (page === "slots") loadSlots(); if (page === "rxslots") loadRxSlots(); if (page === "analyzer") loadAnalyzer(); }));
   elements.refreshStatusButton.addEventListener("click", loadStatus); elements.refreshAnalyzerButton.addEventListener("click", loadAnalyzer); elements.refreshSlotsButton.addEventListener("click", loadSlots); elements.refreshRxSlotsButton.addEventListener("click", loadRxSlots);
+  [elements.analyzerRssiThreshold, elements.analyzerMinPulses, elements.analyzerMinDuration, elements.analyzerSimilarity, elements.analyzerOccurrences, elements.analyzerAlternation].forEach(control => {
+    control?.addEventListener("input", queueAnalyzerSettingsSave);
+    control?.addEventListener("change", queueAnalyzerSettingsSave);
+  });
+  elements.analyzerShowRejected?.addEventListener("change", queueAnalyzerSettingsSave);
+  elements.analyzerFreezeCandidate?.addEventListener("change", queueAnalyzerSettingsSave);
+  elements.analyzerDeveloperMode?.addEventListener("change", queueAnalyzerSettingsSave);
   elements.mqttEnabled.addEventListener("change", updateMqttFieldState); elements.settingsForm.addEventListener("submit", saveConfig);
   elements.learnStartButton.addEventListener("click", () => learnAction("/api/radio/learn/start")); elements.learnAcceptButton.addEventListener("click", () => learnAction("/api/radio/learn/accept")); elements.learnSaveButton.addEventListener("click", saveLearnToSlot);
   elements.slotSaveSelect.addEventListener("change", updateSlotSaveSelection); elements.slotSaveCancel.addEventListener("click", closeSlotSaveModal); elements.slotSaveConfirm.addEventListener("click", confirmSlotSave); elements.slotSaveModal.addEventListener("click", event => { if (event.target === elements.slotSaveModal) closeSlotSaveModal(); }); elements.learnTestSendButton.addEventListener("click", () => learnAction("/api/radio/learn/test-send")); elements.learnDiscardButton.addEventListener("click", () => learnAction("/api/radio/learn/discard"));

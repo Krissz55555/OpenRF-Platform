@@ -248,6 +248,7 @@ void handleLearnTestSendApi() {
 
 void handleAnalyzerApi() {
   const AnalyzerSnapshot a = analyzerGetSnapshot();
+  const AnalyzerCandidateSnapshot c = analyzerGetLastCandidate();
   JsonDocument doc;
   doc["available"] = a.available;
   doc["sequence"] = a.sequence;
@@ -279,6 +280,9 @@ void handleAnalyzerApi() {
   for (uint16_t i = 0; i < a.rawPulseCount; i++) raw.add(a.rawPulses[i]);
   doc["decoded_frames"] = a.decodedFrames;
   doc["unknown_frames"] = a.unknownFrames;
+  doc["structured_signal"] = a.structuredSignal;
+  doc["occurrences"] = a.occurrences;
+  doc["similarity"] = a.similarity;
   JsonArray classes = doc["pulse_classes_us"].to<JsonArray>();
   for (uint8_t i = 0; i < a.pulseClassCount; i++) classes.add(a.pulseClasses[i]);
   const RadioDiagnostics d = Radio.getDiagnostics();
@@ -286,10 +290,104 @@ void handleAnalyzerApi() {
   doc["accepted_frames"] = d.acceptedFrames;
   doc["rejected_frames"] = d.rejectedFrames;
   doc["background_filtered_frames"] = d.backgroundFilteredFrames;
+  doc["weak_rssi_frames"] = a.weakRssiFrames;
+  doc["analyzer_min_rssi"] = config.analyzerMinRssi;
+  doc["current_rssi_dbm"] = Radio.getRSSI();
+  doc["peak_rssi_dbm"] = a.peakRssiDbm;
+  doc["analyzer_min_pulse_count"] = config.analyzerMinPulseCount;
+  doc["analyzer_min_duration_us"] = config.analyzerMinDurationUs;
+  doc["analyzer_similarity"] = config.analyzerSimilarity;
+  doc["analyzer_occurrences"] = config.analyzerOccurrences;
+  doc["analyzer_show_rejected"] = config.analyzerShowRejected;
+  doc["analyzer_freeze_candidate"] = config.analyzerFreezeCandidate;
+  doc["analyzer_alternation_tolerance"] = config.analyzerAlternationTolerance;
+  doc["analyzer_developer_mode"] = config.analyzerDeveloperMode;
+  JsonObject candidate = doc["last_candidate"].to<JsonObject>();
+  candidate["available"] = c.available;
+  candidate["sequence"] = c.sequence;
+  candidate["age_ms"] = c.available ? millis() - c.capturedAtMs : 0;
+  candidate["frequency_mhz"] = c.frequencyMHz;
+  candidate["rssi_dbm"] = c.rssiDbm;
+  candidate["pulse_count"] = c.pulseCount;
+  candidate["duration_us"] = c.durationUs;
+  candidate["reject_reason"] = c.rejectReason;
+  candidate["min_pulse_us"] = c.minPulseUs;
+  candidate["max_pulse_us"] = c.maxPulseUs;
+  candidate["raw_truncated"] = c.rawPulseCount < c.pulseCount;
+  candidate["alternation_ratio"] = c.alternationRatio;
+  candidate["same_sign_pairs"] = c.sameSignPairs;
+  candidate["longest_same_sign_run"] = c.longestSameSignRun;
+  candidate["normalized_pulse_count"] = c.normalizedPulseCount;
+  JsonArray candidateRaw = candidate["raw_pulses_us"].to<JsonArray>();
+  for (uint16_t i = 0; i < c.rawPulseCount; i++) candidateRaw.add(c.rawPulses[i]);
+  JsonArray normalizedRaw = candidate["normalized_pulses_us"].to<JsonArray>();
+  for (uint16_t i = 0; i < c.normalizedPulseCount; i++) normalizedRaw.add(c.normalizedPulses[i]);
   String output;
   serializeJson(doc, output);
   server.sendHeader("Cache-Control", "no-store");
   server.send(200, "application/json", output);
+}
+
+void handleAnalyzerSettingsApi() {
+  if (!server.hasArg("plain")) {
+    sendJsonError(400, "Missing JSON request body");
+    return;
+  }
+
+  JsonDocument doc;
+  const DeserializationError error = deserializeJson(doc, server.arg("plain"));
+  if (error) {
+    sendJsonError(400, "Invalid JSON request body");
+    return;
+  }
+
+  const bool previousDeveloperMode = config.analyzerDeveloperMode;
+
+  if (doc["min_rssi"].is<int>()) {
+    const int value = doc["min_rssi"];
+    if (value < -100 || value > -20) { sendJsonError(400, "Minimum RSSI must be between -100 and -20 dBm"); return; }
+    config.analyzerMinRssi = static_cast<int8_t>(value);
+  }
+  if (doc["min_pulse_count"].is<int>()) {
+    const int value = doc["min_pulse_count"];
+    if (value < 2 || value > 300) { sendJsonError(400, "Minimum pulse count must be between 2 and 300"); return; }
+    config.analyzerMinPulseCount = static_cast<uint16_t>(value);
+  }
+  if (!doc["min_duration_us"].isNull()) {
+    const uint32_t value = doc["min_duration_us"].as<uint32_t>();
+    if (value < 500 || value > 500000) { sendJsonError(400, "Minimum duration must be between 500 and 500000 us"); return; }
+    config.analyzerMinDurationUs = value;
+  }
+  if (doc["similarity"].is<int>()) {
+    const int value = doc["similarity"];
+    if (value < 50 || value > 100) { sendJsonError(400, "Similarity must be between 50 and 100 percent"); return; }
+    config.analyzerSimilarity = static_cast<uint8_t>(value);
+  }
+  if (doc["occurrences"].is<int>()) {
+    const int value = doc["occurrences"];
+    if (value < 1 || value > 10) { sendJsonError(400, "Occurrences must be between 1 and 10"); return; }
+    config.analyzerOccurrences = static_cast<uint8_t>(value);
+  }
+  if (doc["show_rejected"].is<bool>()) config.analyzerShowRejected = doc["show_rejected"];
+  if (doc["freeze_candidate"].is<bool>()) config.analyzerFreezeCandidate = doc["freeze_candidate"];
+  if (doc["alternation_tolerance"].is<int>()) {
+    const int value = doc["alternation_tolerance"];
+    if (value < 50 || value > 100) { sendJsonError(400, "Alternation tolerance must be between 50 and 100 percent"); return; }
+    config.analyzerAlternationTolerance = static_cast<uint8_t>(value);
+  }
+  if (doc["developer_mode"].is<bool>()) config.analyzerDeveloperMode = doc["developer_mode"];
+
+  if (previousDeveloperMode != config.analyzerDeveloperMode) analyzerReset();
+
+  if (!configSave()) {
+    sendJsonError(500, "Failed to save Analyzer settings");
+    return;
+  }
+
+  JsonDocument response;
+  response["success"] = true;
+  response["message"] = "Analyzer settings saved";
+  sendJsonDoc(200, response);
 }
 
 void handleRadioDebugApi() {
@@ -699,6 +797,7 @@ void webBegin() {
   server.on("/api/radio/learn/test-send", HTTP_POST, handleLearnTestSendApi);
   server.on("/api/debug/radio", HTTP_GET, handleRadioDebugApi);
   server.on("/api/analyzer", HTTP_GET, handleAnalyzerApi);
+  server.on("/api/analyzer/settings", HTTP_POST, handleAnalyzerSettingsApi);
   server.on("/api/slots", HTTP_GET, handleSlotsApi);
   server.on("/api/slots/save", HTTP_POST, handleSlotSaveApi);
   server.on("/api/slots/send", HTTP_POST, handleSlotSendApi);

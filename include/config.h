@@ -16,6 +16,16 @@ struct AppConfig {
   bool homeAssistantDiscovery;
 
   uint8_t replayCount;
+
+  int8_t analyzerMinRssi;
+  uint16_t analyzerMinPulseCount;
+  uint32_t analyzerMinDurationUs;
+  uint8_t analyzerSimilarity;
+  uint8_t analyzerOccurrences;
+  bool analyzerShowRejected;
+  bool analyzerFreezeCandidate;
+  uint8_t analyzerAlternationTolerance;
+  bool analyzerDeveloperMode;
 };
 
 extern AppConfig config;

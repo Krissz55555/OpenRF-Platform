@@ -1,3 +1,5 @@
+# OpenRF Platform
+
 <p align="center">
   <img src="assets/openrf-platform-logo.svg" width="320" alt="OpenRF Platform Logo">
 </p>
@@ -13,6 +15,8 @@ RF Gateway • RF Analyzer • Home Assistant • MQTT • REST API • OTA
 </p>
 
 ---
+
+**Current release: v1.1.0 — Analyzer v2 Final**
 
 OpenRF Platform is a modern, modular RF platform built for ESP8266 devices equipped with a CC1101 transceiver.
 
@@ -63,19 +67,22 @@ For RF gateway applications, ESP8266 still provides excellent performance while 
 - MQTT publishing
 - Home Assistant event generation
 
-## RF Analyzer
+## RF Analyzer v2
 
-Integrated RF Analyzer featuring:
+Integrated RF diagnostics for known and unknown 433 MHz signals:
 
-- RSSI measurement
-- Frequency information
-- Pulse timing analysis
-- Pulse statistics
-- Pulse classification
-- Base pulse estimation
-- Bitstream visualization
-- RAW export
-- Unknown protocol analysis
+- Adjustable Analyzer-only RSSI threshold
+- Candidate capture before Analyzer filtering
+- RSSI, pulse count, duration and reject-reason diagnostics
+- Structured unknown signal detection
+- Similarity and occurrence analysis
+- Original RAW pulse export
+- Normalized RAW pulse analysis
+- Alternation ratio, same-sign pair and longest-run statistics
+- Visible Developer Mode with advanced Analyzer controls
+- Persistent Analyzer settings stored in LittleFS
+
+Standard Mode retains the clean v1.0.0 Analyzer layout and original filtering behaviour. Developer Mode enables the Analyzer v2 candidate pipeline, advanced thresholds, normalization metrics and detailed processing statistics. Analyzer settings do not alter RX Slots, RF Learn, MQTT or Home Assistant processing.
 
 ## Home Assistant
 
@@ -311,7 +318,7 @@ See the [LICENSE](LICENSE) file for details.
 
 # Credits
 
-Created and maintained by **Krisztián Kocsis**
+Created and maintained by **Kocsis Krisztián**
 
 Architecture, design discussions and documentation support by **ChatGPT (OpenAI)**
 

@@ -4,6 +4,7 @@
 #include "hardware.h"
 #include "radio.h"
 #include "analyzer.h"
+#include "config.h"
 
 namespace {
 CC1101 cc1101 = new Module(OPENRF_CC1101_CS_PIN, OPENRF_CC1101_GDO0_PIN,
@@ -264,14 +265,30 @@ void RadioManager::finalizeFrame() {
     diagnostics_.backgroundFilteredFrames++;
   }
 
+  // Standard mode intentionally preserves the v1.0.0 Analyzer behaviour.
+  // Analyzer v2 candidate capture and additional filters are enabled only by
+  // the explicit Developer Mode switch.
+  if (config.analyzerDeveloperMode) {
+    analyzerRecordCandidate(lastRaw, count, totalDuration, frequencyMHz_, frameRssi,
+                            frameValid ? String("accepted") : rejectReason);
+  }
+
   if (!frameValid) {
-    // Rejected edge bursts are receiver noise candidates, not RF frames.
-    // Keep them in diagnostics, but do not replace the Analyzer's last
-    // meaningful signal during normal monitoring. Learn mode still exposes
-    // the rejected capture so protocol development remains possible.
+    // In standard mode rejected bursts remain diagnostics only, exactly as in
+    // v1.0.0. Learn mode may still expose the rejected capture. Developer Mode
+    // can additionally classify repeatable rejected candidates.
     if (learningNow) {
       analyzerProcess(lastRaw, count, totalDuration, frequencyMHz_, frameRssi,
                       false, rejectReason);
+    } else if (config.analyzerDeveloperMode) {
+      if (analyzerRssiPasses(frameRssi)) {
+        if (config.analyzerShowRejected) {
+          analyzerConsiderRejected(lastRaw, count, totalDuration, frequencyMHz_,
+                                   frameRssi, rejectReason);
+        }
+      } else {
+        analyzerRecordWeakRssi(frameRssi);
+      }
     }
     diagnostics_.rejectedFrames++;
     diagnostics_.lastRejectReason = rejectReason;
@@ -287,8 +304,12 @@ void RadioManager::finalizeFrame() {
     return;
   }
 
-  analyzerProcess(lastRaw, count, totalDuration, frequencyMHz_, frameRssi,
-                  true, "accepted");
+  if (!config.analyzerDeveloperMode || analyzerRssiPasses(frameRssi)) {
+    analyzerProcess(lastRaw, count, totalDuration, frequencyMHz_, frameRssi,
+                    true, "accepted");
+  } else {
+    analyzerRecordWeakRssi(frameRssi);
+  }
   diagnostics_.acceptedFrames++;
   lastFrame.available = true;
   lastFrame.sequence++;
