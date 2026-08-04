@@ -3,9 +3,17 @@
 #include "protocol_decoder.h"
 
 struct DecodedRFEvent {
+  // valid=true means the frame is fully decoded and safe for RX Slots/MQTT.
   bool valid = false;
+
+  // recognized=true may also describe a structural protocol match whose
+  // payload/event decoding is still under development.
+  bool recognized = false;
+  bool kinetic = false;
+
   OpenRfProtocol protocolId = OpenRfProtocol::UNKNOWN;
   String protocol;
+  String encoding;
   String deviceId;
   String command;
   String code;

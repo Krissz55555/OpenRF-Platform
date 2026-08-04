@@ -2,7 +2,11 @@
 
 #include <Arduino.h>
 
-constexpr uint16_t OPENRF_MAX_RAW_PULSES = 2000;
+// ESP8266 final profile: accepted frames are limited to 500 pulses in
+// radio.cpp. A 600-pulse buffer keeps a safety margin while avoiding four
+// separate 4 kB RAW buffers. This saves about 11.2 kB of RAM across RX, last
+// frame, Learn and the shared scratch buffer.
+constexpr uint16_t OPENRF_MAX_RAW_PULSES = 600;
 
 enum class RadioMode : uint8_t { OFFLINE, IDLE, RX, TX, ERROR };
 enum class LearnState : uint8_t { IDLE, WAITING_FOR_SIGNAL, PREVIEW_READY, ACCEPTED_RAM };
@@ -34,6 +38,11 @@ struct RadioDiagnostics {
   uint32_t acceptedFrames = 0;
   uint32_t rejectedFrames = 0;
   uint32_t backgroundFilteredFrames = 0;
+  uint32_t ignoredGlitchEdges = 0;
+  uint32_t gapFinalizedFrames = 0;
+  uint32_t timeoutFinalizedFrames = 0;
+  uint32_t bufferFullFrames = 0;
+  uint32_t mergedSameSignPulses = 0;
   uint32_t txCount = 0;
   uint32_t txErrors = 0;
   float lastNoiseFloorDbm = -127.0F;

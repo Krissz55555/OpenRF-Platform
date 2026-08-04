@@ -16,6 +16,7 @@ struct AppConfig {
   bool homeAssistantDiscovery;
 
   uint8_t replayCount;
+  uint16_t radioFrequencyMhz;
 
   int8_t analyzerMinRssi;
   uint16_t analyzerMinPulseCount;

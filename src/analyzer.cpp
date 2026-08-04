@@ -269,7 +269,8 @@ void analyzerProcess(const int16_t* pulses, uint16_t count, uint32_t durationUs,
   const DecodedRFEvent decoded = universalDecode(pulses, count);
   if (decoded.valid) {
     snapshot.protocol = decoded.protocol;
-    snapshot.encoding = decoded.protocol == "PT2262" ? "Tri-state PWM" : "OOK PWM";
+    snapshot.encoding = decoded.encoding.length() ? decoded.encoding
+                                                  : (decoded.protocol == "PT2262" ? "Tri-state PWM" : "OOK PWM");
     snapshot.deviceId = decoded.deviceId;
     snapshot.command = decoded.command;
     snapshot.symbolCount = decoded.symbolCount;
@@ -280,6 +281,14 @@ void analyzerProcess(const int16_t* pulses, uint16_t count, uint32_t durationUs,
     if (decoded.symbolCount <= 64 && decoded.protocol != "PT2262")
       snapshot.bitstream = binaryString(decoded.numericCode, decoded.symbolCount);
     snapshot.decodedFrames++;
+  } else if (decoded.recognized) {
+    // Structural protocol recognition is visible to Analyzer diagnostics but
+    // deliberately remains non-actionable for RX Slots, MQTT and HA.
+    snapshot.protocol = decoded.protocol;
+    snapshot.encoding = decoded.encoding;
+    snapshot.status = "Recognized / decoding pending";
+    snapshot.structuredSignal = true;
+    snapshot.unknownFrames++;
   } else {
     snapshot.protocol = "Unknown";
     snapshot.encoding = snapshot.pulseClassCount >= 2 ? "OOK / PWM candidate" : "Unknown";
@@ -343,9 +352,13 @@ bool analyzerConsiderRejected(const int16_t* pulses, uint16_t count, uint32_t du
   if (cluster->occurrences < config.analyzerOccurrences) return false;
 
   analyzerProcess(pulses, count, durationUs, frequencyMHz, rssiDbm, false, rejectReason);
-  snapshot.status = "Structured unknown";
-  snapshot.protocol = "Structured unknown";
-  snapshot.encoding = snapshot.pulseClassCount >= 2 ? "OOK / PWM candidate" : "Unknown";
+  // Preserve a recognition-only Protocol Manager result (for example NVKP01).
+  // Only generic unmatched candidates are relabeled as Structured unknown.
+  if (snapshot.protocol == "Unknown") {
+    snapshot.status = "Structured unknown";
+    snapshot.protocol = "Structured unknown";
+    snapshot.encoding = snapshot.pulseClassCount >= 2 ? "OOK / PWM candidate" : "Unknown";
+  }
   snapshot.structuredSignal = true;
   snapshot.occurrences = cluster->occurrences;
   snapshot.similarity = bestSimilarity;

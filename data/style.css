@@ -520,3 +520,5 @@ h3 {
 .developer-toggle-compact span{font-size:13px}
 .developer-toggle-compact b{font-size:11px}
 @media(max-width:760px){.analyzer-heading-actions{width:100%;justify-content:flex-start}.developer-toggle-compact{order:-1}}
+
+.developer-exclusive-warning{margin:0 0 16px;padding:14px 16px;border:1px solid rgba(255,72,72,.7);border-radius:12px;background:rgba(180,20,20,.18);color:#ff8b8b;display:flex;flex-direction:column;gap:5px;line-height:1.45}.developer-exclusive-warning strong{color:#ff5f5f;font-size:15px}.developer-exclusive-warning[hidden]{display:none}

@@ -5,12 +5,13 @@
 #include "radio.h"
 #include "analyzer.h"
 #include "config.h"
+#include "universal_decoder.h"
 
 namespace {
 CC1101 cc1101 = new Module(OPENRF_CC1101_CS_PIN, OPENRF_CC1101_GDO0_PIN,
                            RADIOLIB_NC, OPENRF_CC1101_GDO2_PIN);
 
-constexpr uint32_t RSSI_REFRESH_INTERVAL_MS = 20;
+constexpr uint32_t RSSI_REFRESH_INTERVAL_MS = 5;
 constexpr uint32_t FRAME_GAP_US = 25000;
 constexpr uint16_t MIN_CAPTURE_PULSES = 20;
 constexpr uint16_t MIN_VALID_PULSES = 30;
@@ -29,6 +30,11 @@ volatile uint32_t lastEdgeUs = 0;
 volatile int lastLevel = LOW;
 volatile bool frameReady = false;
 volatile bool captureEnabled = false;
+volatile uint32_t ignoredGlitchEdges = 0;
+volatile uint32_t gapFinalizedFrames = 0;
+volatile uint32_t timeoutFinalizedFrames = 0;
+volatile uint32_t bufferFullFrames = 0;
+volatile uint32_t mergedSameSignPulses = 0;
 
 int16_t lastRaw[OPENRF_MAX_RAW_PULSES];
 RawFrameInfo lastFrame;
@@ -37,30 +43,61 @@ LearnCaptureInfo learnCapture;
 
 void IRAM_ATTR gdo0ISR() {
   if (!captureEnabled) return;
+
   const uint32_t now = micros();
   const uint32_t duration = now - lastEdgeUs;
-  lastEdgeUs = now;
   const int level = digitalRead(OPENRF_CC1101_GDO0_PIN);
 
+  // Ignore very short glitches without moving the accepted-edge timestamp or
+  // changing the accepted signal level. Updating either value here would split
+  // one real pulse into fragments and can create artificial same-sign pairs.
   if (duration < NOISE_US) {
-    lastLevel = level;
+    ignoredGlitchEdges++;
     return;
   }
-  if (frameReady) {
-    lastLevel = level;
-    return;
-  }
+
+  if (frameReady) return;
+
+  // This is now an accepted edge, so it becomes the reference for the next
+  // measured pulse.
+  lastEdgeUs = now;
+
   if (duration > FRAME_GAP_US) {
-    if (rxCount >= MIN_CAPTURE_PULSES) frameReady = true;
-    else rxCount = 0;
+    if (rxCount >= MIN_CAPTURE_PULSES) {
+      frameReady = true;
+      gapFinalizedFrames++;
+    } else {
+      // A long idle period synchronizes the receiver to the next complete
+      // transmission and discards any short partial/noise fragment.
+      rxCount = 0;
+    }
     lastLevel = level;
     return;
   }
+
   if (rxCount < OPENRF_MAX_RAW_PULSES) {
     const int32_t signedDuration = (lastLevel == HIGH)
         ? static_cast<int32_t>(duration)
         : -static_cast<int32_t>(duration);
-    rxPulses[rxCount++] = static_cast<int16_t>(signedDuration);
+
+    // Defensive RAW cleanup: two consecutive entries with the same sign cannot
+    // represent two valid OOK levels. Merge them before they reach Analyzer,
+    // Learn, RX Slots or a future decoder. The normal case still appends one
+    // pulse per accepted edge.
+    if (rxCount > 0 && ((rxPulses[rxCount - 1] > 0) == (signedDuration > 0))) {
+      int32_t merged = static_cast<int32_t>(rxPulses[rxCount - 1]) + signedDuration;
+      if (merged > INT16_MAX) merged = INT16_MAX;
+      if (merged < INT16_MIN) merged = INT16_MIN;
+      rxPulses[rxCount - 1] = static_cast<int16_t>(merged);
+      mergedSameSignPulses++;
+    } else {
+      rxPulses[rxCount++] = static_cast<int16_t>(signedDuration);
+    }
+
+    if (rxCount >= OPENRF_MAX_RAW_PULSES) {
+      frameReady = true;
+      bufferFullFrames++;
+    }
   }
   lastLevel = level;
 }
@@ -69,7 +106,7 @@ void IRAM_ATTR gdo0ISR() {
 RadioManager Radio;
 
 bool RadioManager::begin() {
-  frequencyMHz_ = OPENRF_RADIO_FREQUENCY_MHZ;
+  frequencyMHz_ = config.radioFrequencyMhz == 868 ? 868.35F : 433.92F;
   initialized_ = false;
   mode_ = RadioMode::OFFLINE;
   lastRssi_ = -127.0F;
@@ -80,7 +117,7 @@ bool RadioManager::begin() {
   analyzerReset();
 
   Serial.println("CC1101 initialization started");
-  lastError_ = cc1101.begin(OPENRF_RADIO_FREQUENCY_MHZ,
+  lastError_ = cc1101.begin(frequencyMHz_,
       OPENRF_RADIO_BIT_RATE_KBPS, OPENRF_RADIO_FREQUENCY_DEVIATION_KHZ,
       OPENRF_RADIO_RX_BANDWIDTH_KHZ, OPENRF_RADIO_OUTPUT_POWER_DBM,
       OPENRF_RADIO_PREAMBLE_BITS);
@@ -139,7 +176,10 @@ void RadioManager::loop() {
 
   if (!readyCopy && countCopy >= MIN_CAPTURE_PULSES &&
       static_cast<uint32_t>(micros() - edgeCopy) > FRAME_GAP_US) {
-    noInterrupts(); frameReady = true; interrupts();
+    noInterrupts();
+    frameReady = true;
+    timeoutFinalizedFrames++;
+    interrupts();
     readyCopy = true;
   }
   if (readyCopy) finalizeFrame();
@@ -249,17 +289,46 @@ void RadioManager::finalizeFrame() {
   const float frameRssi = framePeakRssi_;
   framePeakRssi_ = -127.0F;
   diagnostics_.rawCandidates++;
+  noInterrupts();
+  diagnostics_.ignoredGlitchEdges = ignoredGlitchEdges;
+  diagnostics_.gapFinalizedFrames = gapFinalizedFrames;
+  diagnostics_.timeoutFinalizedFrames = timeoutFinalizedFrames;
+  diagnostics_.bufferFullFrames = bufferFullFrames;
+  diagnostics_.mergedSameSignPulses = mergedSameSignPulses;
+  interrupts();
 
   String rejectReason;
-  const bool learningNow = learnCapture.state == LearnState::WAITING_FOR_SIGNAL;
-  bool frameValid = validateFrame(lastRaw, count, totalDuration, rejectReason);
+  const bool learningNow =
+      learnCapture.state == LearnState::WAITING_FOR_SIGNAL;
 
-  // Normal monitoring is intentionally quieter than Learn mode. Short, weak
-  // background bursts are still available to Learn, but they do not update the
-  // Dashboard or flood MQTT during normal operation. A frame only fails this
-  // operational filter when both its pulse count and duration are small.
-  if (frameValid && !learningNow &&
-      count < MIN_MONITOR_PULSES && totalDuration < MIN_MONITOR_DURATION_US) {
+  bool frameValid =
+      validateFrame(lastRaw, count, totalDuration, rejectReason);
+
+  /*
+   * Give registered protocol decoders a chance before the normal monitoring
+   * filter rejects short frames as background traffic.
+   *
+   * This is important for short Kinetic protocols such as NVKP01. A recognized
+   * but not yet actionable protocol may still be displayed by Analyzer, while
+   * RX Slots, MQTT and Home Assistant continue to ignore it.
+   */
+  bool recognizedProtocol = false;
+
+  if (frameValid) {
+    const DecodedRFEvent preliminary =
+        universalDecode(lastRaw, count);
+
+    recognizedProtocol = preliminary.recognized;
+  }
+
+  // Normal monitoring is intentionally quieter than Learn mode. Short
+  // background bursts remain filtered unless a registered decoder already
+  // recognizes their protocol structure.
+  if (frameValid &&
+      !learningNow &&
+      !recognizedProtocol &&
+      count < MIN_MONITOR_PULSES &&
+      totalDuration < MIN_MONITOR_DURATION_US) {
     frameValid = false;
     rejectReason = "background_short_frame";
     diagnostics_.backgroundFilteredFrames++;
@@ -269,18 +338,21 @@ void RadioManager::finalizeFrame() {
   // Analyzer v2 candidate capture and additional filters are enabled only by
   // the explicit Developer Mode switch.
   if (config.analyzerDeveloperMode) {
-    analyzerRecordCandidate(lastRaw, count, totalDuration, frequencyMHz_, frameRssi,
-                            frameValid ? String("accepted") : rejectReason);
+    analyzerRecordCandidate(
+        lastRaw,
+        count,
+        totalDuration,
+        frequencyMHz_,
+        frameRssi,
+        frameValid ? String("accepted") : rejectReason
+    );
   }
 
   if (!frameValid) {
     // In standard mode rejected bursts remain diagnostics only, exactly as in
     // v1.0.0. Learn mode may still expose the rejected capture. Developer Mode
     // can additionally classify repeatable rejected candidates.
-    if (learningNow) {
-      analyzerProcess(lastRaw, count, totalDuration, frequencyMHz_, frameRssi,
-                      false, rejectReason);
-    } else if (config.analyzerDeveloperMode) {
+    if (config.analyzerDeveloperMode) {
       if (analyzerRssiPasses(frameRssi)) {
         if (config.analyzerShowRejected) {
           analyzerConsiderRejected(lastRaw, count, totalDuration, frequencyMHz_,
@@ -304,11 +376,16 @@ void RadioManager::finalizeFrame() {
     return;
   }
 
-  if (!config.analyzerDeveloperMode || analyzerRssiPasses(frameRssi)) {
-    analyzerProcess(lastRaw, count, totalDuration, frequencyMHz_, frameRssi,
-                    true, "accepted");
-  } else {
-    analyzerRecordWeakRssi(frameRssi);
+  // Full Analyzer processing is intentionally disabled in normal gateway
+  // mode. This keeps the ESP8266 stable for RX Slots, MQTT and Home Assistant.
+  // Developer Mode enables the complete diagnostics pipeline exclusively.
+  if (config.analyzerDeveloperMode) {
+    if (analyzerRssiPasses(frameRssi)) {
+      analyzerProcess(lastRaw, count, totalDuration, frequencyMHz_, frameRssi,
+                      true, "accepted");
+    } else {
+      analyzerRecordWeakRssi(frameRssi);
+    }
   }
   diagnostics_.acceptedFrames++;
   lastFrame.available = true;

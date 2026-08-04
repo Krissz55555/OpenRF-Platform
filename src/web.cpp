@@ -247,8 +247,52 @@ void handleLearnTestSendApi() {
 
 
 void handleAnalyzerApi() {
+  // ESP8266 stability profile: build a bounded snapshot and stream it directly
+  // to the client. Avoiding one large temporary String prevents repeated heap
+  // reallocations and fragmentation while the Analyzer page is open.
+  const bool developerMode = config.analyzerDeveloperMode;
+
+  // In normal gateway mode the full Analyzer is intentionally stopped on
+  // ESP8266. Return only a tiny status document so the page can explain the
+  // operating mode without allocating the full diagnostics JSON.
+  if (!developerMode) {
+    char disabledJson[384];
+    snprintf(disabledJson, sizeof(disabledJson),
+             "{\"available\":false,\"analyzer_disabled\":true,"
+             "\"analyzer_developer_mode\":false,"
+             "\"status\":\"Analyzer standby - normal gateway mode\","
+             "\"frequency_mhz\":%.3f,\"current_rssi_dbm\":%.1f,"
+             "\"heap_free\":%lu,\"heap_max_block\":%lu}",
+             Radio.getFrequency(), Radio.getRSSI(),
+             static_cast<unsigned long>(ESP.getFreeHeap()),
+             static_cast<unsigned long>(ESP.getMaxFreeBlockSize()));
+    server.sendHeader("Cache-Control", "no-store");
+    server.send(200, "application/json", disabledJson);
+    return;
+  }
+
   const AnalyzerSnapshot a = analyzerGetSnapshot();
   const AnalyzerCandidateSnapshot c = analyzerGetLastCandidate();
+  constexpr uint16_t DEVELOPER_RAW_LIMIT = 96;
+  const uint16_t rawLimit = DEVELOPER_RAW_LIMIT;
+
+  // Final ESP8266 safety guard. Do not start a dynamic Analyzer JSON build if
+  // the TCP/IP stack does not have enough contiguous heap available. Returning
+  // a tiny fixed-buffer response is preferable to corrupting the allocator.
+  const uint32_t freeHeap = ESP.getFreeHeap();
+  const uint32_t maxBlock = ESP.getMaxFreeBlockSize();
+  if (freeHeap < 17000U || maxBlock < 9000U) {
+    char lowMemoryJson[192];
+    snprintf(lowMemoryJson, sizeof(lowMemoryJson),
+             "{\"available\":false,\"low_memory\":true,\"heap_free\":%lu,"
+             "\"heap_max_block\":%lu,\"status\":\"Analyzer paused: low memory\"}",
+             static_cast<unsigned long>(freeHeap),
+             static_cast<unsigned long>(maxBlock));
+    server.sendHeader("Cache-Control", "no-store");
+    server.send(200, "application/json", lowMemoryJson);
+    return;
+  }
+
   JsonDocument doc;
   doc["available"] = a.available;
   doc["sequence"] = a.sequence;
@@ -265,7 +309,7 @@ void handleAnalyzerApi() {
   doc["device_id"] = a.deviceId;
   doc["command"] = a.command;
   doc["symbol_count"] = a.symbolCount;
-  doc["code_hex"] = a.symbolCount ? uint64Hex(a.code) : String("");
+  doc["code_hex"] = a.symbolCount ? uint64Hex(a.code) : String();
   doc["base_pulse_us"] = a.basePulseUs;
   doc["frame_count"] = a.frameCount;
   doc["quality"] = a.quality;
@@ -275,9 +319,12 @@ void handleAnalyzerApi() {
   doc["average_pulse_us"] = a.averagePulseUs;
   doc["shortest_class_us"] = a.shortestClassUs;
   doc["class_ratio"] = a.classRatio;
-  doc["raw_truncated"] = a.rawPulseCount < a.pulseCount;
+
+  const uint16_t rawCount = min(a.rawPulseCount, rawLimit);
+  doc["raw_truncated"] = rawCount < a.pulseCount;
   JsonArray raw = doc["raw_pulses_us"].to<JsonArray>();
-  for (uint16_t i = 0; i < a.rawPulseCount; i++) raw.add(a.rawPulses[i]);
+  for (uint16_t i = 0; i < rawCount; i++) raw.add(a.rawPulses[i]);
+
   doc["decoded_frames"] = a.decodedFrames;
   doc["unknown_frames"] = a.unknownFrames;
   doc["structured_signal"] = a.structuredSignal;
@@ -285,11 +332,17 @@ void handleAnalyzerApi() {
   doc["similarity"] = a.similarity;
   JsonArray classes = doc["pulse_classes_us"].to<JsonArray>();
   for (uint8_t i = 0; i < a.pulseClassCount; i++) classes.add(a.pulseClasses[i]);
+
   const RadioDiagnostics d = Radio.getDiagnostics();
   doc["raw_candidates"] = d.rawCandidates;
   doc["accepted_frames"] = d.acceptedFrames;
   doc["rejected_frames"] = d.rejectedFrames;
   doc["background_filtered_frames"] = d.backgroundFilteredFrames;
+  doc["ignored_glitch_edges"] = d.ignoredGlitchEdges;
+  doc["gap_finalized_frames"] = d.gapFinalizedFrames;
+  doc["timeout_finalized_frames"] = d.timeoutFinalizedFrames;
+  doc["buffer_full_frames"] = d.bufferFullFrames;
+  doc["merged_same_sign_pulses"] = d.mergedSameSignPulses;
   doc["weak_rssi_frames"] = a.weakRssiFrames;
   doc["analyzer_min_rssi"] = config.analyzerMinRssi;
   doc["current_rssi_dbm"] = Radio.getRSSI();
@@ -301,7 +354,11 @@ void handleAnalyzerApi() {
   doc["analyzer_show_rejected"] = config.analyzerShowRejected;
   doc["analyzer_freeze_candidate"] = config.analyzerFreezeCandidate;
   doc["analyzer_alternation_tolerance"] = config.analyzerAlternationTolerance;
-  doc["analyzer_developer_mode"] = config.analyzerDeveloperMode;
+  doc["analyzer_developer_mode"] = developerMode;
+  doc["heap_free"] = freeHeap;
+  doc["heap_max_block"] = maxBlock;
+  doc["low_memory"] = false;
+
   JsonObject candidate = doc["last_candidate"].to<JsonObject>();
   candidate["available"] = c.available;
   candidate["sequence"] = c.sequence;
@@ -313,19 +370,27 @@ void handleAnalyzerApi() {
   candidate["reject_reason"] = c.rejectReason;
   candidate["min_pulse_us"] = c.minPulseUs;
   candidate["max_pulse_us"] = c.maxPulseUs;
-  candidate["raw_truncated"] = c.rawPulseCount < c.pulseCount;
   candidate["alternation_ratio"] = c.alternationRatio;
   candidate["same_sign_pairs"] = c.sameSignPairs;
   candidate["longest_same_sign_run"] = c.longestSameSignRun;
   candidate["normalized_pulse_count"] = c.normalizedPulseCount;
+
+  const uint16_t candidateRawCount = developerMode ? min(c.rawPulseCount, DEVELOPER_RAW_LIMIT) : 0;
+  candidate["raw_truncated"] = candidateRawCount < c.pulseCount;
   JsonArray candidateRaw = candidate["raw_pulses_us"].to<JsonArray>();
-  for (uint16_t i = 0; i < c.rawPulseCount; i++) candidateRaw.add(c.rawPulses[i]);
+  for (uint16_t i = 0; i < candidateRawCount; i++) candidateRaw.add(c.rawPulses[i]);
+
   JsonArray normalizedRaw = candidate["normalized_pulses_us"].to<JsonArray>();
-  for (uint16_t i = 0; i < c.normalizedPulseCount; i++) normalizedRaw.add(c.normalizedPulses[i]);
-  String output;
-  serializeJson(doc, output);
+  if (developerMode) {
+    const uint16_t normalizedCount = min(c.normalizedPulseCount, DEVELOPER_RAW_LIMIT);
+    for (uint16_t i = 0; i < normalizedCount; i++) normalizedRaw.add(c.normalizedPulses[i]);
+  }
+
+  const size_t contentLength = measureJson(doc);
   server.sendHeader("Cache-Control", "no-store");
-  server.send(200, "application/json", output);
+  server.setContentLength(contentLength);
+  server.send(200, "application/json", "");
+  serializeJson(doc, server.client());
 }
 
 void handleAnalyzerSettingsApi() {
@@ -397,6 +462,11 @@ void handleRadioDebugApi() {
   doc["accepted_frames"] = d.acceptedFrames;
   doc["rejected_frames"] = d.rejectedFrames;
   doc["background_filtered_frames"] = d.backgroundFilteredFrames;
+  doc["ignored_glitch_edges"] = d.ignoredGlitchEdges;
+  doc["gap_finalized_frames"] = d.gapFinalizedFrames;
+  doc["timeout_finalized_frames"] = d.timeoutFinalizedFrames;
+  doc["buffer_full_frames"] = d.bufferFullFrames;
+  doc["merged_same_sign_pulses"] = d.mergedSameSignPulses;
   doc["tx_count"] = d.txCount;
   doc["tx_errors"] = d.txErrors;
   doc["last_noise_floor_dbm"] = d.lastNoiseFloorDbm;
@@ -604,8 +674,13 @@ void handlePostConfigApi() {
   mqttUser.trim();
 
   uint32_t replayCount = doc["replay_count"] | 1;
+  const uint16_t radioFrequencyMhz = doc["radio_frequency_mhz"] | 433;
   if (replayCount < 1 || replayCount > 10) {
     sendJsonError(400, "Replay count must be between 1 and 10");
+    return;
+  }
+  if (radioFrequencyMhz != 433 && radioFrequencyMhz != 868) {
+    sendJsonError(400, "Radio frequency must be 433 or 868 MHz");
     return;
   }
 
@@ -621,6 +696,7 @@ void handlePostConfigApi() {
   config.mqttUser = mqttUser;
   config.homeAssistantDiscovery = doc["home_assistant_discovery"] | true;
   config.replayCount = static_cast<uint8_t>(replayCount);
+  config.radioFrequencyMhz = radioFrequencyMhz;
 
   // Empty password means: keep the currently saved password.
   if (doc["mqtt_password"].is<const char*>()) {

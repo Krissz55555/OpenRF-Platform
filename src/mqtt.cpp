@@ -20,6 +20,16 @@ uint32_t lastPublishedSequence = 0;
 String baseTopic;
 String clientId;
 bool discoveryPending = false;
+bool discoveryRescanRequested = false;
+uint16_t discoveryStep = 0;
+uint32_t discoveryNextStepMs = 0;
+
+constexpr uint32_t DISCOVERY_START_DELAY_MS = 15000;
+constexpr uint32_t DISCOVERY_RESCAN_DELAY_MS = 5000;
+constexpr uint32_t DISCOVERY_STEP_DELAY_MS = 150;
+constexpr uint32_t DISCOVERY_RETRY_DELAY_MS = 500;
+constexpr uint32_t DISCOVERY_MIN_FREE_HEAP = 12000;
+constexpr uint32_t DISCOVERY_MIN_MAX_BLOCK = 3000;
 
 uint8_t pendingLearnSlot = 0;
 String pendingLearnName;
@@ -186,7 +196,7 @@ void connectIfNeeded() {
   client.subscribe((baseTopic + "/slot/+/delete").c_str());
   client.subscribe((baseTopic + "/learn/next").c_str());
   mqttPublishStatus();
-  if (config.homeAssistantDiscovery) { discoveryPending = true; mqttPublishDiscovery(); }
+  if (config.homeAssistantDiscovery) mqttPublishDiscovery();
   Serial.print("MQTT connected, base topic: ");
   Serial.println(baseTopic);
 }
@@ -243,12 +253,188 @@ void processPendingLearn() {
     Serial.println(completedSlot);
   }
 }
+
+void processDiscovery() {
+  if (!discoveryPending || !config.homeAssistantDiscovery || !client.connected()) return;
+
+  const uint32_t now = millis();
+  if (static_cast<int32_t>(now - discoveryNextStepMs) < 0) return;
+
+  // Home Assistant discovery produces many temporary String/JSON allocations.
+  // On ESP8266, run only one small discovery item per loop iteration and wait
+  // until both total heap and the largest contiguous block are healthy.
+  if (ESP.getFreeHeap() < DISCOVERY_MIN_FREE_HEAP ||
+      ESP.getMaxFreeBlockSize() < DISCOVERY_MIN_MAX_BLOCK) {
+    discoveryNextStepMs = now + DISCOVERY_RETRY_DELAY_MS;
+    return;
+  }
+
+  const String id = deviceIdentifier();
+  const String availability = baseTopic + "/availability";
+
+  // Fixed bridge entities: steps 0..4.
+  if (discoveryStep == 0) {
+    JsonDocument doc;
+    doc["name"] = "Learn next empty slot";
+    doc["unique_id"] = id + "_learn_next";
+    doc["command_topic"] = baseTopic + "/learn/next";
+    doc["payload_press"] = "PRESS";
+    doc["availability_topic"] = availability;
+    doc["icon"] = "mdi:remote-plus";
+    addDevice(doc);
+    publishDiscoveryDocument("homeassistant/button/" + id + "/learn_next/config", doc);
+  } else if (discoveryStep == 1) {
+    JsonDocument doc;
+    doc["name"] = "Learn state";
+    doc["unique_id"] = id + "_learn_state";
+    doc["state_topic"] = baseTopic + "/learn/state";
+    doc["value_template"] = "{{ value_json.state }}";
+    doc["availability_topic"] = availability;
+    doc["entity_category"] = "diagnostic";
+    doc["icon"] = "mdi:school";
+    addDevice(doc);
+    publishDiscoveryDocument("homeassistant/sensor/" + id + "/learn_state/config", doc);
+  } else if (discoveryStep == 2) {
+    JsonDocument doc;
+    doc["name"] = "Status";
+    doc["unique_id"] = id + "_status";
+    doc["state_topic"] = baseTopic + "/availability";
+    doc["payload_available"] = "online";
+    doc["payload_not_available"] = "offline";
+    doc["availability_topic"] = availability;
+    doc["entity_category"] = "diagnostic";
+    doc["icon"] = "mdi:radio-tower";
+    addDevice(doc);
+    publishDiscoveryDocument("homeassistant/sensor/" + id + "/status/config", doc);
+  } else if (discoveryStep == 3) {
+    JsonDocument doc;
+    doc["name"] = "Last RF pulse count";
+    doc["unique_id"] = id + "_rx_pulses";
+    doc["state_topic"] = baseTopic + "/rx";
+    doc["value_template"] = "{{ value_json.pulse_count }}";
+    doc["availability_topic"] = availability;
+    doc["icon"] = "mdi:pulse";
+    addDevice(doc);
+    publishDiscoveryDocument("homeassistant/sensor/" + id + "/rx_pulses/config", doc);
+  } else if (discoveryStep == 4) {
+    JsonDocument doc;
+    doc["name"] = "Last RF RSSI";
+    doc["unique_id"] = id + "_rx_rssi";
+    doc["state_topic"] = baseTopic + "/rx";
+    doc["value_template"] = "{{ value_json.rssi_dbm }}";
+    doc["unit_of_measurement"] = "dBm";
+    doc["device_class"] = "signal_strength";
+    doc["state_class"] = "measurement";
+    doc["availability_topic"] = availability;
+    addDevice(doc);
+    publishDiscoveryDocument("homeassistant/sensor/" + id + "/rx_rssi/config", doc);
+  } else if (discoveryStep < 5 + OPENRF_SLOT_COUNT * 3U) {
+    // TX slots: three discovery documents per slot.
+    const uint16_t relative = discoveryStep - 5;
+    const uint8_t slot = static_cast<uint8_t>(relative / 3U) + 1;
+    const uint8_t item = static_cast<uint8_t>(relative % 3U);
+    const SlotInfo info = storageGetSlotInfo(slot);
+    const String slotBase = "homeassistant/button/" + id + "/slot_" + String(slot);
+
+    if (!info.used) {
+      const char* suffix = item == 0 ? "/config" : (item == 1 ? "_relearn/config" : "_delete/config");
+      client.publish((slotBase + suffix).c_str(), "", true);
+    } else {
+      JsonDocument doc;
+      if (item == 0) {
+        doc["name"] = info.name;
+        doc["unique_id"] = id + "_slot_" + String(slot);
+        doc["command_topic"] = baseTopic + "/slot/" + String(slot) + "/send";
+        doc["icon"] = "mdi:remote";
+      } else if (item == 1) {
+        doc["name"] = info.name + " Relearn";
+        doc["unique_id"] = id + "_slot_" + String(slot) + "_relearn";
+        doc["command_topic"] = baseTopic + "/slot/" + String(slot) + "/relearn";
+        doc["icon"] = "mdi:refresh";
+      } else {
+        doc["name"] = info.name + " Delete";
+        doc["unique_id"] = id + "_slot_" + String(slot) + "_delete";
+        doc["command_topic"] = baseTopic + "/slot/" + String(slot) + "/delete";
+        doc["icon"] = "mdi:delete";
+      }
+      doc["payload_press"] = "PRESS";
+      doc["availability_topic"] = availability;
+      addDevice(doc);
+      const String topic = item == 0 ? slotBase + "/config"
+                                     : slotBase + (item == 1 ? "_relearn/config" : "_delete/config");
+      publishDiscoveryDocument(topic, doc);
+    }
+  } else {
+    // RX slots: trigger + binary sensor per slot.
+    const uint16_t rxStart = 5 + OPENRF_SLOT_COUNT * 3U;
+    const uint16_t relative = discoveryStep - rxStart;
+    const uint8_t slot = static_cast<uint8_t>(relative / 2U) + 1;
+    const uint8_t item = static_cast<uint8_t>(relative % 2U);
+    const RxSlotInfo info = rxSlotGetInfo(slot);
+    const String triggerTopic = "homeassistant/device_automation/" + id + "/rx_slot_" + String(slot) + "/config";
+    const String sensorTopic = "homeassistant/binary_sensor/" + id + "/rx_slot_" + String(slot) + "/config";
+
+    if (!info.used || !info.enabled) {
+      client.publish((item == 0 ? triggerTopic : sensorTopic).c_str(), "", true);
+    } else if (item == 0) {
+      JsonDocument doc;
+      doc["automation_type"] = "trigger";
+      doc["type"] = "button_short_press";
+      doc["subtype"] = "rx_slot_" + String(slot);
+      doc["topic"] = baseTopic + "/rxslot/" + String(slot) + "/event";
+      doc["value_template"] = "{{ value_json.event }}";
+      doc["payload"] = "pressed";
+      addDevice(doc);
+      publishDiscoveryDocument(triggerTopic, doc);
+    } else {
+      JsonDocument doc;
+      doc["name"] = info.name;
+      doc["unique_id"] = id + "_rx_slot_" + String(slot);
+      doc["state_topic"] = baseTopic + "/rxslot/" + String(slot) + "/event";
+      doc["value_template"] = "{{ value_json.event }}";
+      doc["payload_on"] = "pressed";
+      doc["off_delay"] = 1;
+      doc["availability_topic"] = availability;
+      doc["icon"] = "mdi:remote";
+      addDevice(doc);
+      publishDiscoveryDocument(sensorTopic, doc);
+    }
+  }
+
+  discoveryStep++;
+  const uint16_t totalSteps = 5 + OPENRF_SLOT_COUNT * 3U + OPENRF_RX_SLOT_COUNT * 2U;
+  if (discoveryStep >= totalSteps) {
+    discoveryPending = false;
+    discoveryStep = 0;
+    Serial.print(F("Home Assistant discovery published gradually, TX slots: "));
+    Serial.print(storageCountUsedSlots());
+    Serial.print(F(", RX slots: "));
+    Serial.println(rxSlotCountUsed());
+
+    // Changes requested while a discovery pass was running are coalesced into
+    // exactly one additional pass. This avoids restarting the sequence midway,
+    // which could leave stale or partially updated Home Assistant entities.
+    if (discoveryRescanRequested) {
+      discoveryRescanRequested = false;
+      discoveryPending = true;
+      discoveryNextStepMs = now + DISCOVERY_RESCAN_DELAY_MS;
+      Serial.println(F("Home Assistant discovery rescan queued"));
+    }
+    return;
+  }
+
+  discoveryNextStepMs = now + DISCOVERY_STEP_DELAY_MS;
+}
+
 }  // namespace
 
 void mqttPublishRxSlotEvent(uint8_t slot, const RxSlotInfo& info) {
   if (!client.connected()) return;
   JsonDocument doc;
+  // Keep the legacy "pressed" payload for existing Home Assistant device
+  // automation triggers, and expose the normalized Kinetic action separately.
   doc["event"] = "pressed";
+  doc["action"] = info.code.length() ? info.code : "PRESS";
   doc["slot"] = slot;
   doc["name"] = info.name;
   doc["protocol"] = info.protocol;
@@ -288,7 +474,7 @@ void mqttLoop() {
   client.loop();
   processPendingLearn();
   publishRxIfNew();
-  if (discoveryPending && config.homeAssistantDiscovery) mqttPublishDiscovery();
+  processDiscovery();
 }
 
 bool mqttIsConnected() { return client.connected(); }
@@ -318,162 +504,25 @@ void mqttPublishStatus() {
 }
 
 void mqttPublishDiscovery() {
-  if (!config.homeAssistantDiscovery) { discoveryPending = false; return; }
-  if (!client.connected()) { discoveryPending = true; return; }
+  if (!config.homeAssistantDiscovery) {
+    discoveryPending = false;
+    discoveryRescanRequested = false;
+    discoveryStep = 0;
+    return;
+  }
+
+  // Never restart a discovery pass that is already in progress. Repeated
+  // requests from Learn, slot changes or web callbacks are merged into one
+  // follow-up pass, so Home Assistant receives a complete and ordered set.
+  if (discoveryPending) {
+    discoveryRescanRequested = true;
+    return;
+  }
+
+  // Delay the first item after Wi-Fi/MQTT connection or a configuration write.
+  // This separates discovery JSON/TCP allocations from startup and LittleFS IO.
   discoveryPending = true;
-
-  const String id = deviceIdentifier();
-  const String availability = baseTopic + "/availability";
-
-
-  // Learn the next valid RF signal into the first empty slot.
-  {
-    JsonDocument doc;
-    doc["name"] = "Learn next empty slot";
-    doc["unique_id"] = id + "_learn_next";
-    doc["command_topic"] = baseTopic + "/learn/next";
-    doc["payload_press"] = "PRESS";
-    doc["availability_topic"] = availability;
-    doc["icon"] = "mdi:remote-plus";
-    addDevice(doc);
-    publishDiscoveryDocument("homeassistant/button/" + id + "/learn_next/config", doc);
-  }
-  {
-    JsonDocument doc;
-    doc["name"] = "Learn state";
-    doc["unique_id"] = id + "_learn_state";
-    doc["state_topic"] = baseTopic + "/learn/state";
-    doc["value_template"] = "{{ value_json.state }}";
-    doc["availability_topic"] = availability;
-    doc["entity_category"] = "diagnostic";
-    doc["icon"] = "mdi:school";
-    addDevice(doc);
-    publishDiscoveryDocument("homeassistant/sensor/" + id + "/learn_state/config", doc);
-  }
-
-  // Diagnostic bridge status sensor.
-  {
-    JsonDocument doc;
-    doc["name"] = "Status";
-    doc["unique_id"] = id + "_status";
-    doc["state_topic"] = baseTopic + "/availability";
-    doc["payload_available"] = "online";
-    doc["payload_not_available"] = "offline";
-    doc["availability_topic"] = availability;
-    doc["entity_category"] = "diagnostic";
-    doc["icon"] = "mdi:radio-tower";
-    addDevice(doc);
-    publishDiscoveryDocument("homeassistant/sensor/" + id + "/status/config", doc);
-  }
-
-  // Last received RAW frame metrics.
-  {
-    JsonDocument doc;
-    doc["name"] = "Last RF pulse count";
-    doc["unique_id"] = id + "_rx_pulses";
-    doc["state_topic"] = baseTopic + "/rx";
-    doc["value_template"] = "{{ value_json.pulse_count }}";
-    doc["availability_topic"] = availability;
-    doc["icon"] = "mdi:pulse";
-    addDevice(doc);
-    publishDiscoveryDocument("homeassistant/sensor/" + id + "/rx_pulses/config", doc);
-  }
-  {
-    JsonDocument doc;
-    doc["name"] = "Last RF RSSI";
-    doc["unique_id"] = id + "_rx_rssi";
-    doc["state_topic"] = baseTopic + "/rx";
-    doc["value_template"] = "{{ value_json.rssi_dbm }}";
-    doc["unit_of_measurement"] = "dBm";
-    doc["device_class"] = "signal_strength";
-    doc["state_class"] = "measurement";
-    doc["availability_topic"] = availability;
-    addDevice(doc);
-    publishDiscoveryDocument("homeassistant/sensor/" + id + "/rx_rssi/config", doc);
-  }
-
-  // One Home Assistant button for every saved slot. Empty slots remove any
-  // previously retained discovery entry, so deleted slots disappear from HA.
-  for (uint8_t slot = 1; slot <= OPENRF_SLOT_COUNT; slot++) {
-    const SlotInfo info = storageGetSlotInfo(slot);
-    const String discoveryTopic = "homeassistant/button/" + id + "/slot_" + String(slot) + "/config";
-
-    if (!info.used) {
-      client.publish(discoveryTopic.c_str(), "", true);
-      client.publish(("homeassistant/button/" + id + "/slot_" + String(slot) + "_relearn/config").c_str(), "", true);
-      client.publish(("homeassistant/button/" + id + "/slot_" + String(slot) + "_delete/config").c_str(), "", true);
-      yield();
-      continue;
-    }
-
-    {
-      JsonDocument doc;
-      doc["name"] = info.name;
-      doc["unique_id"] = id + "_slot_" + String(slot);
-      doc["command_topic"] = baseTopic + "/slot/" + String(slot) + "/send";
-      doc["payload_press"] = "PRESS";
-      doc["availability_topic"] = availability;
-      doc["icon"] = "mdi:remote";
-      addDevice(doc);
-      publishDiscoveryDocument(discoveryTopic, doc);
-    }
-    {
-      JsonDocument doc;
-      doc["name"] = info.name + " Relearn";
-      doc["unique_id"] = id + "_slot_" + String(slot) + "_relearn";
-      doc["command_topic"] = baseTopic + "/slot/" + String(slot) + "/relearn";
-      doc["payload_press"] = "PRESS";
-      doc["availability_topic"] = availability;
-      doc["icon"] = "mdi:refresh";
-      addDevice(doc);
-      publishDiscoveryDocument("homeassistant/button/" + id + "/slot_" + String(slot) + "_relearn/config", doc);
-    }
-    {
-      JsonDocument doc;
-      doc["name"] = info.name + " Delete";
-      doc["unique_id"] = id + "_slot_" + String(slot) + "_delete";
-      doc["command_topic"] = baseTopic + "/slot/" + String(slot) + "/delete";
-      doc["payload_press"] = "PRESS";
-      doc["availability_topic"] = availability;
-      doc["icon"] = "mdi:delete";
-      addDevice(doc);
-      publishDiscoveryDocument("homeassistant/button/" + id + "/slot_" + String(slot) + "_delete/config", doc);
-    }
-  }
-
-  // RX slots are exposed as Home Assistant device automation triggers.
-  for (uint8_t slot = 1; slot <= OPENRF_RX_SLOT_COUNT; slot++) {
-    const RxSlotInfo info = rxSlotGetInfo(slot);
-    const String topic = "homeassistant/device_automation/" + id + "/rx_slot_" + String(slot) + "/config";
-    if (!info.used || !info.enabled) { client.publish(topic.c_str(), "", true); client.publish(("homeassistant/binary_sensor/" + id + "/rx_slot_" + String(slot) + "/config").c_str(), "", true); yield(); continue; }
-    JsonDocument doc;
-    doc["automation_type"] = "trigger";
-    doc["type"] = "button_short_press";
-    doc["subtype"] = "rx_slot_" + String(slot);
-    doc["topic"] = baseTopic + "/rxslot/" + String(slot) + "/event";
-    doc["value_template"] = "{{ value_json.event }}";
-    doc["payload"] = "pressed";
-    addDevice(doc);
-    publishDiscoveryDocument(topic, doc);
-
-    // A visible entity as well as a device automation trigger. It turns on
-    // briefly for each matched remote-button press.
-    JsonDocument sensor;
-    sensor["name"] = info.name;
-    sensor["unique_id"] = id + "_rx_slot_" + String(slot);
-    sensor["state_topic"] = baseTopic + "/rxslot/" + String(slot) + "/event";
-    sensor["value_template"] = "{{ value_json.event }}";
-    sensor["payload_on"] = "pressed";
-    sensor["off_delay"] = 1;
-    sensor["availability_topic"] = availability;
-    sensor["icon"] = "mdi:remote";
-    addDevice(sensor);
-    publishDiscoveryDocument("homeassistant/binary_sensor/" + id + "/rx_slot_" + String(slot) + "/config", sensor);
-  }
-
-  discoveryPending = false;
-  Serial.print("Home Assistant discovery published, TX slots: ");
-  Serial.print(storageCountUsedSlots());
-  Serial.print(", RX slots: ");
-  Serial.println(rxSlotCountUsed());
+  discoveryRescanRequested = false;
+  discoveryStep = 0;
+  discoveryNextStepMs = millis() + DISCOVERY_START_DELAY_MS;
 }

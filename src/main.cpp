@@ -35,17 +35,29 @@ void setup() {
 
 void loop() {
   static uint32_t lastHealthLogMs = 0;
+  static uint32_t minimumObservedHeap = UINT32_MAX;
   wifiLoop();
   Radio.loop();
-  rxSlotsLoop();
-  mqttLoop();
+
+  // ESP8266 Developer Mode is an exclusive RF diagnostics profile.
+  // Keep Wi-Fi and the WebUI alive, but pause RX Slot processing, MQTT event
+  // publishing and Home Assistant Discovery while the full Analyzer is active.
+  if (!config.analyzerDeveloperMode) {
+    rxSlotsLoop();
+    mqttLoop();
+  }
+
   webLoop();
 
   const uint32_t now = millis();
-  if (now - lastHealthLogMs >= 300000UL) {
+  const uint32_t currentHeap = ESP.getFreeHeap();
+  if (currentHeap < minimumObservedHeap) minimumObservedHeap = currentHeap;
+  if (now - lastHealthLogMs >= 60000UL) {
     lastHealthLogMs = now;
     Serial.print(F("Health: heap="));
-    Serial.print(ESP.getFreeHeap());
+    Serial.print(currentHeap);
+    Serial.print(F(", min_heap="));
+    Serial.print(minimumObservedHeap);
     Serial.print(F(", max_block="));
     Serial.print(ESP.getMaxFreeBlockSize());
     Serial.print(F(", fragmentation="));

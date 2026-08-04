@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include "universal_decoder.h"
+#include "protocols/protocol_manager.h"
 
 namespace {
 String hex64(uint64_t value, uint8_t minDigits = 1) {
@@ -16,19 +17,41 @@ String hex64(uint64_t value, uint8_t minDigits = 1) {
 }
 
 DecodedRFEvent universalDecode(const int16_t* pulses, uint16_t count) {
-  const ProtocolDecodeResult decoded = protocolDecode(pulses, count);
+  const ProtocolManagerResult decoded = protocolManagerDecode(pulses, count);
   DecodedRFEvent event;
-  if (!decoded.valid) return event;
+  if (!decoded.recognized) return event;
+
+  event.recognized = true;
+  event.kinetic = decoded.kinetic;
+  event.protocol = decoded.protocolName;
+  event.encoding = decoded.encodingName;
+
+  if (!decoded.actionable) {
+    // Recognition-only results are intentionally not valid. Analyzer may show
+    // them, while RX learning, RX Slots, MQTT and Home Assistant ignore them.
+    return event;
+  }
 
   event.valid = true;
-  event.protocolId = decoded.protocol;
-  event.protocol = protocolName(decoded.protocol);
-  event.symbolCount = decoded.symbolCount;
-  event.pulseLengthUs = decoded.pulseLengthUs;
-  event.repeats = decoded.repeats;
-  event.quality = decoded.quality;
-  event.numericCode = decoded.code;
-  event.code = hex64(decoded.code);
+
+  if (decoded.kinetic) {
+    const KineticEvent& kinetic = decoded.kineticEvent;
+    event.deviceId = kinetic.deviceId;
+    event.command = kinetic.controlId;
+    event.code = kineticEventTypeName(kinetic.type);
+    event.repeats = kinetic.metadata.repeats;
+    event.quality = kinetic.metadata.quality;
+    return event;
+  }
+
+  const ProtocolDecodeResult& classic = decoded.classic;
+  event.protocolId = classic.protocol;
+  event.symbolCount = classic.symbolCount;
+  event.pulseLengthUs = classic.pulseLengthUs;
+  event.repeats = classic.repeats;
+  event.quality = classic.quality;
+  event.numericCode = classic.code;
+  event.code = hex64(classic.code);
   event.deviceId = event.code;
   return event;
 }

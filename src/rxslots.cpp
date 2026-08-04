@@ -9,7 +9,21 @@ namespace {
 constexpr uint32_t MAGIC_V3 = 0x52585033UL; // RXP3
 constexpr uint32_t MAGIC_V2 = 0x52585032UL; // RXP2
 constexpr uint8_t VERSION_V3 = 3;
+// Normal decoded RF events use a short per-slot lockout. NVKP01 is handled
+// separately: a physical click must produce two short Kinetic captures
+// (mechanical press + release) within the confirmation window before an RX
+// Slot, MQTT or Home Assistant event is emitted.
 constexpr uint16_t LOCKOUT_MS = 700;
+constexpr uint16_t NVKP_CONFIRM_WINDOW_MS = 1000;
+constexpr uint16_t NVKP_MIN_PULSES = 28;
+constexpr uint16_t NVKP_MAX_PULSES = 70;
+constexpr uint32_t NVKP_MIN_DURATION_US = 18000UL;
+constexpr uint32_t NVKP_MAX_DURATION_US = 60000UL;
+constexpr uint16_t NVKP_MARKER_LOW_MIN_US = 1250;
+constexpr uint16_t NVKP_MARKER_LOW_MAX_US = 2100;
+constexpr uint16_t NVKP_MARKER_HIGH_MIN_US = 280;
+constexpr uint16_t NVKP_MARKER_HIGH_MAX_US = 950;
+constexpr uint8_t NVKP_MIN_MARKER_PAIRS = 2;
 
 struct HeaderV3 {
   uint32_t magic;
@@ -45,6 +59,57 @@ uint8_t lastQuality[OPENRF_RX_SLOT_COUNT + 1] = {};
 uint8_t learningSlot = 0;
 String learningName;
 String learnState = "idle";
+uint32_t nvkpPendingAtMs = 0;
+bool nvkpPending = false;
+
+
+uint32_t pulseWidth(const int16_t pulse) {
+  return static_cast<uint32_t>(abs(static_cast<int32_t>(pulse)));
+}
+
+bool isStrictNvkpCapture(const int16_t* pulses, uint16_t count,
+                         uint32_t durationUs) {
+  if (!pulses || count < NVKP_MIN_PULSES || count > NVKP_MAX_PULSES ||
+      durationUs < NVKP_MIN_DURATION_US || durationUs > NVKP_MAX_DURATION_US) {
+    return false;
+  }
+
+  uint8_t markerPairs = 0;
+  for (uint16_t i = 0; i + 1 < count; i++) {
+    // A cleaned OOK capture must alternate LOW/HIGH throughout.
+    if ((pulses[i] > 0) == (pulses[i + 1] > 0)) return false;
+
+    const uint32_t lowUs = pulseWidth(pulses[i]);
+    const uint32_t highUs = pulseWidth(pulses[i + 1]);
+    if (pulses[i] < 0 && pulses[i + 1] > 0 &&
+        lowUs >= NVKP_MARKER_LOW_MIN_US && lowUs <= NVKP_MARKER_LOW_MAX_US &&
+        highUs >= NVKP_MARKER_HIGH_MIN_US && highUs <= NVKP_MARKER_HIGH_MAX_US) {
+      if (markerPairs < UINT8_MAX) markerPairs++;
+    }
+  }
+  return markerPairs >= NVKP_MIN_MARKER_PAIRS;
+}
+
+bool confirmNvkpEvent(const int16_t* pulses, uint16_t count,
+                      uint32_t durationUs, uint32_t nowMs) {
+  if (!isStrictNvkpCapture(pulses, count, durationUs)) {
+    if (nvkpPending && nowMs - nvkpPendingAtMs > NVKP_CONFIRM_WINDOW_MS) {
+      nvkpPending = false;
+    }
+    return false;
+  }
+
+  if (!nvkpPending || nowMs - nvkpPendingAtMs > NVKP_CONFIRM_WINDOW_MS) {
+    nvkpPending = true;
+    nvkpPendingAtMs = nowMs;
+    Serial.println(F("NVKP01 candidate pending confirmation"));
+    return false;
+  }
+
+  nvkpPending = false;
+  Serial.println(F("NVKP01 confirmed by second short capture"));
+  return true;
+}
 
 String path(uint8_t slot) { return "/rxslot" + String(slot) + ".bin"; }
 bool valid(uint8_t slot) { return slot >= 1 && slot <= OPENRF_RX_SLOT_COUNT; }
@@ -170,11 +235,21 @@ void rxSlotsLoop() {
   const DecodedRFEvent decoded = universalDecode(openrfScratch, count);
   if (!decoded.valid) return;
 
+  // NVKP01 is intentionally stricter for actionable gateway events than for
+  // Analyzer recognition. Long remote-control trains are rejected by the
+  // short-frame envelope, and one isolated marker-like burst cannot trigger
+  // MQTT or Home Assistant. A real click is confirmed by its press/release
+  // capture pair within one second.
+  if (decoded.kinetic && decoded.protocol.equalsIgnoreCase("NVKP01 Kinetic") &&
+      !confirmNvkpEvent(openrfScratch, count, frame.durationUs, millis())) {
+    return;
+  }
+
   for (uint8_t slot = 1; slot <= OPENRF_RX_SLOT_COUNT; slot++) {
     HeaderV3 h{};
     if (!readHeader(slot, h) || !h.enabled) continue;
     if (!decodedEventMatches(decoded, h.protocol, h.deviceId, h.command, h.code, h.matchCode)) continue;
-    if (millis() - lastMatchedAt[slot] < LOCKOUT_MS) return;
+    if (millis() - lastMatchedAt[slot] < LOCKOUT_MS) continue;
     lastMatchedAt[slot] = millis(); matchCounts[slot]++;
     lastRssi[slot] = frame.rssiDbm; lastQuality[slot] = decoded.quality;
     const RxSlotInfo info = rxSlotGetInfo(slot);
