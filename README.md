@@ -239,6 +239,14 @@ The selected value is stored in LittleFS and applied after restart.
 4. Run **Upload** for the firmware.
 5. Run **Upload Filesystem Image** when the WebUI files in `data/` have changed.
 
+Flash offsets:
+
+Firmware:
+0x000000 firmware.bin
+
+LittleFS:
+0x300000 littlefs.bin
+
 > Uploading the filesystem image replaces LittleFS and may erase Wi-Fi, MQTT, Analyzer and slot configuration. Create a Backup before a filesystem upload and Restore it afterwards when preserving existing configuration is required.
 
 ### First start
