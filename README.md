@@ -444,7 +444,6 @@ Developed by Kocsis Krisztián with implementation assistance, architecture disc
 
 ⭐ If OpenRF Platform is useful to you, consider starring the project on GitHub.
 
-
 ---
 
 <!-- OPENRF_STATS_START -->
@@ -455,3 +454,15 @@ Developed by Kocsis Krisztián with implementation assistance, architecture disc
 - Tracking since: **2026-08-07**
 
 <!-- OPENRF_STATS_END -->
+
+---
+
+## ☕ Support OpenRF Platform
+
+OpenRF Platform is free and open source.
+
+If you find the project useful and would like to support its continued development, hardware testing and future features, you can buy me a coffee:
+
+[☕ Buy me a coffee](https://buymeacoffee.com/krissz55555)
+
+Thank you for supporting OpenRF Platform!
