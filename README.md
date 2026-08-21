@@ -443,3 +443,15 @@ Created and maintained by **Kocsis Krisztián**.
 Developed by Kocsis Krisztián with implementation assistance, architecture discussions and documentation support from **ChatGPT (OpenAI)**.
 
 ⭐ If OpenRF Platform is useful to you, consider starring the project on GitHub.
+
+
+---
+
+<!-- OPENRF_STATS_START -->
+## OpenRF Platform Statistics
+
+- Repository views: **121**
+- Repository clones: **13**
+- Tracking since: **2026-08-07**
+
+<!-- OPENRF_STATS_END -->
