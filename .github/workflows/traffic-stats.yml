@@ -66,12 +66,54 @@ jobs:
           merge("views-latest.json", "views-history.json", "views")
           PY
 
+      - name: Update README statistics
+        run: |
+          python3 - <<'PY'
+          import json
+          import re
+          from pathlib import Path
+
+          clones = json.loads(Path("stats/clones-history.json").read_text())
+          views = json.loads(Path("stats/views-history.json").read_text())
+
+          total_clones = sum(item["count"] for item in clones.values())
+          total_views = sum(item["count"] for item in views.values())
+
+          tracking_since = min(
+              list(clones.keys()) + list(views.keys())
+          )[:10]
+
+          readme_path = Path("README.md")
+          readme = readme_path.read_text()
+
+          block = f"""<!-- OPENRF_STATS_START -->
+## OpenRF Platform Statistics
+
+- Repository views: **{total_views}**
+- Repository clones: **{total_clones}**
+- Tracking since: **{tracking_since}**
+
+<!-- OPENRF_STATS_END -->"""
+
+          pattern = re.compile(
+              r"<!-- OPENRF_STATS_START -->.*?<!-- OPENRF_STATS_END -->",
+              re.S
+          )
+
+          if pattern.search(readme):
+              readme = pattern.sub(block, readme)
+          else:
+              readme += "\n\n---\n\n" + block + "\n"
+
+          readme_path.write_text(readme)
+          PY
+
       - name: Commit updated statistics
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add stats/
+          git add stats/ README.md
 
           if git diff --cached --quiet; then
             echo "No traffic changes."
