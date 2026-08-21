@@ -18,7 +18,7 @@ jobs:
 
       - name: Collect GitHub traffic statistics
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.TRAFFIC_STATS_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
           mkdir -p stats
