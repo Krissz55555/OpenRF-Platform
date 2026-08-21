@@ -1,6 +1,8 @@
 #pragma once
 #include <Arduino.h>
 
+struct RFEventMessage;
+
 constexpr uint8_t OPENRF_RX_SLOT_COUNT = 10;
 
 struct RxSlotInfo {
@@ -33,3 +35,8 @@ uint8_t rxSlotLearningId();
 
 void mqttPublishRxSlotEvent(uint8_t slot, const RxSlotInfo& info);
 void mqttPublishDiscovery();
+
+void rxSlotsHandleRFEvent(const RFEventMessage& event);
+
+uint32_t rxSlotWeakLearnRejectedCount();
+float rxSlotLastWeakLearnRssi();

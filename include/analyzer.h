@@ -6,6 +6,17 @@
 constexpr uint16_t OPENRF_ANALYZER_RAW_PREVIEW = 192;
 
 
+struct AnalyzerLiveState {
+  bool available = false;
+  uint32_t sequence = 0;
+  uint32_t capturedAtMs = 0;
+  bool candidateAvailable = false;
+  uint32_t candidateSequence = 0;
+  uint32_t candidateCapturedAtMs = 0;
+  float currentPeakRssiDbm = -127.0F;
+  uint32_t weakRssiFrames = 0;
+};
+
 struct AnalyzerCandidateSnapshot {
   bool available = false;
   uint32_t sequence = 0;
@@ -18,12 +29,12 @@ struct AnalyzerCandidateSnapshot {
   uint16_t minPulseUs = 0;
   uint16_t maxPulseUs = 0;
   uint16_t rawPulseCount = 0;
-  int16_t rawPulses[OPENRF_ANALYZER_RAW_PREVIEW] = {0};
+  int16_t* rawPulses = nullptr;
   uint8_t alternationRatio = 0;
   uint16_t sameSignPairs = 0;
   uint8_t longestSameSignRun = 0;
   uint16_t normalizedPulseCount = 0;
-  int16_t normalizedPulses[OPENRF_ANALYZER_RAW_PREVIEW] = {0};
+  int16_t* normalizedPulses = nullptr;
 };
 
 struct AnalyzerSnapshot {
@@ -49,7 +60,7 @@ struct AnalyzerSnapshot {
   uint16_t pulseClasses[6] = {0};
   uint8_t pulseClassCount = 0;
   String bitstream;
-  int16_t rawPulses[OPENRF_ANALYZER_RAW_PREVIEW] = {0};
+  int16_t* rawPulses = nullptr;
   uint16_t rawPulseCount = 0;
   uint16_t minPulseUs = 0;
   uint16_t maxPulseUs = 0;
@@ -79,3 +90,9 @@ bool analyzerConsiderRejected(const int16_t* pulses, uint16_t count, uint32_t du
 AnalyzerSnapshot analyzerGetSnapshot();
 bool analyzerRssiPasses(float rssiDbm);
 void analyzerRecordWeakRssi(float rssiDbm);
+
+AnalyzerLiveState analyzerGetLiveState();
+
+bool analyzerBegin();
+size_t analyzerPsramAllocatedBytes();
+bool analyzerUsingExternalRam();

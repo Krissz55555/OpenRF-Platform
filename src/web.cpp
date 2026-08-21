@@ -1,9 +1,9 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
-#include <ESP8266WebServer.h>
-#include <ESP8266WiFi.h>
+#include <WebServer.h>
+#include <WiFi.h>
 #include <LittleFS.h>
-#include <Updater.h>
+#include <Update.h>
 
 #include "config.h"
 #include "version.h"
@@ -12,14 +12,19 @@
 #include "rxslots.h"
 #include "scratch.h"
 #include "mqtt.h"
-#include "wifi.h"
+#include "openrf_wifi.h"
 #include "backup.h"
 #include "analyzer.h"
 #include "web.h"
+#include "platform_compat.h"
+#include "dualcore.h"
+#include "psram_buffers.h"
 
-ESP8266WebServer server(80);
+WebServer server(80);
 
 namespace {
+uint32_t analyzerFullApiCalls = 0;
+uint32_t analyzerLiveApiCalls = 0;
 bool restartScheduled = false;
 uint32_t restartAtMs = 0;
 bool otaUploadOk = false;
@@ -92,9 +97,34 @@ void handleStatusApi() {
   doc["slots"] = 30;
   doc["uptime_seconds"] = millis() / 1000UL;
   doc["free_heap"] = ESP.getFreeHeap();
-  doc["max_free_block"] = ESP.getMaxFreeBlockSize();
-  doc["heap_fragmentation_percent"] = ESP.getHeapFragmentation();
-  doc["reset_reason"] = ESP.getResetReason();
+  doc["core0_load_percent"] = dualCoreLoad(0);
+  doc["core1_load_percent"] = dualCoreLoad(1);
+
+  doc["flash_total"] = ESP.getFlashChipSize();
+  doc["flash_total_mb"] = ESP.getFlashChipSize() / (1024UL * 1024UL);
+
+  const uint32_t psramTotal = ESP.getPsramSize();
+  const uint32_t psramFree = ESP.getFreePsram();
+  doc["psram_total"] = psramTotal;
+  doc["psram_free"] = psramFree;
+  doc["psram_used_percent"] = psramTotal ? ((psramTotal - psramFree) * 100UL / psramTotal) : 0;
+  doc["openrf_psram_buffers"] = psramOpenRFAllocatedBytes();
+  doc["openrf_psram_external"] = psramBuffersUsingExternalRam();
+  doc["analyzer_psram_buffers"] = analyzerPsramAllocatedBytes();
+  doc["analyzer_psram_external"] = analyzerUsingExternalRam();
+
+  const uint32_t heapTotal = ESP.getHeapSize();
+  const uint32_t heapFree = ESP.getFreeHeap();
+  doc["heap_total"] = heapTotal;
+  doc["heap_used_percent"] = heapTotal ? ((heapTotal - heapFree) * 100UL / heapTotal) : 0;
+  doc["rf_event_queue_depth"] = rfEventQueueDepth();
+  doc["rf_event_processed"] = rfEventProcessedCount();
+  doc["rf_event_dropped"] = rfEventDroppedCount();
+  doc["analyzer_full_api_calls"] = analyzerFullApiCalls;
+  doc["analyzer_live_api_calls"] = analyzerLiveApiCalls;
+  doc["max_free_block"] = openrfMaxFreeBlock();
+  doc["heap_fragmentation_percent"] = openrfHeapFragmentation();
+  doc["reset_reason"] = openrfResetReason();
 
   String output;
   serializeJson(doc, output);
@@ -213,7 +243,7 @@ void handleLearnRawApi() {
 }
 
 void handleLearnStartApi() {
-  if (!Radio.startLearning()) {
+  if (!rfCommandStartLearn()) {
     sendJsonError(409, "Radio is not ready for learning");
     return;
   }
@@ -221,7 +251,7 @@ void handleLearnStartApi() {
 }
 
 void handleLearnAcceptApi() {
-  if (!Radio.acceptLearnCapture()) {
+  if (!rfCommandAcceptLearn()) {
     sendJsonError(409, "No preview is ready to accept");
     return;
   }
@@ -229,7 +259,7 @@ void handleLearnAcceptApi() {
 }
 
 void handleLearnDiscardApi() {
-  if (!Radio.discardLearnCapture()) {
+  if (!rfCommandDiscardLearn()) {
     sendJsonError(409, "There is no active Learn capture");
     return;
   }
@@ -238,7 +268,7 @@ void handleLearnDiscardApi() {
 
 
 void handleLearnTestSendApi() {
-  if (!Radio.testSendLearnCapture(config.replayCount)) {
+  if (!rfCommandTestLearnTx(config.replayCount)) {
     sendJsonError(409, "No valid Learn preview is ready, or TX failed");
     return;
   }
@@ -247,25 +277,24 @@ void handleLearnTestSendApi() {
 
 
 void handleAnalyzerApi() {
-  // ESP8266 stability profile: build a bounded snapshot and stream it directly
-  // to the client. Avoiding one large temporary String prevents repeated heap
-  // reallocations and fragmentation while the Analyzer page is open.
+  analyzerFullApiCalls++;
+  // Build a bounded snapshot and stream it directly to the client.
+  // Keep the proven v1.2.0 response shape during the ESP32-S3 port.
   const bool developerMode = config.analyzerDeveloperMode;
 
-  // In normal gateway mode the full Analyzer is intentionally stopped on
-  // ESP8266. Return only a tiny status document so the page can explain the
-  // operating mode without allocating the full diagnostics JSON.
+  // When Analyzer is disabled, return a small status document. Gateway
+  // operation is unaffected by the Analyzer switch on ESP32-S3.
   if (!developerMode) {
     char disabledJson[384];
     snprintf(disabledJson, sizeof(disabledJson),
              "{\"available\":false,\"analyzer_disabled\":true,"
              "\"analyzer_developer_mode\":false,"
-             "\"status\":\"Analyzer standby - normal gateway mode\","
+             "\"status\":\"Analyzer disabled - gateway remains active\","
              "\"frequency_mhz\":%.3f,\"current_rssi_dbm\":%.1f,"
              "\"heap_free\":%lu,\"heap_max_block\":%lu}",
              Radio.getFrequency(), Radio.getRSSI(),
              static_cast<unsigned long>(ESP.getFreeHeap()),
-             static_cast<unsigned long>(ESP.getMaxFreeBlockSize()));
+             static_cast<unsigned long>(openrfMaxFreeBlock()));
     server.sendHeader("Cache-Control", "no-store");
     server.send(200, "application/json", disabledJson);
     return;
@@ -273,25 +302,13 @@ void handleAnalyzerApi() {
 
   const AnalyzerSnapshot a = analyzerGetSnapshot();
   const AnalyzerCandidateSnapshot c = analyzerGetLastCandidate();
+  // Keep the proven v1.2.0 Analyzer response size for this first cleanup step.
+  // Only the ESP8266 low-heap pause is removed here; buffer/response expansion
+  // will be handled separately after PSRAM-aware testing.
   constexpr uint16_t DEVELOPER_RAW_LIMIT = 96;
   const uint16_t rawLimit = DEVELOPER_RAW_LIMIT;
-
-  // Final ESP8266 safety guard. Do not start a dynamic Analyzer JSON build if
-  // the TCP/IP stack does not have enough contiguous heap available. Returning
-  // a tiny fixed-buffer response is preferable to corrupting the allocator.
   const uint32_t freeHeap = ESP.getFreeHeap();
-  const uint32_t maxBlock = ESP.getMaxFreeBlockSize();
-  if (freeHeap < 17000U || maxBlock < 9000U) {
-    char lowMemoryJson[192];
-    snprintf(lowMemoryJson, sizeof(lowMemoryJson),
-             "{\"available\":false,\"low_memory\":true,\"heap_free\":%lu,"
-             "\"heap_max_block\":%lu,\"status\":\"Analyzer paused: low memory\"}",
-             static_cast<unsigned long>(freeHeap),
-             static_cast<unsigned long>(maxBlock));
-    server.sendHeader("Cache-Control", "no-store");
-    server.send(200, "application/json", lowMemoryJson);
-    return;
-  }
+  const uint32_t maxBlock = openrfMaxFreeBlock();
 
   JsonDocument doc;
   doc["available"] = a.available;
@@ -390,7 +407,32 @@ void handleAnalyzerApi() {
   server.sendHeader("Cache-Control", "no-store");
   server.setContentLength(contentLength);
   server.send(200, "application/json", "");
-  serializeJson(doc, server.client());
+WiFiClient client = server.client();
+serializeJson(doc, client);
+}
+
+
+void handleAnalyzerLiveApi() {
+  analyzerLiveApiCalls++;
+  const bool developerMode = config.analyzerDeveloperMode;
+  const AnalyzerLiveState state = analyzerGetLiveState();
+
+  JsonDocument doc;
+  doc["enabled"] = developerMode;
+  doc["available"] = state.available;
+  doc["sequence"] = state.sequence;
+  doc["age_ms"] = state.available ? millis() - state.capturedAtMs : 0;
+  doc["candidate_available"] = state.candidateAvailable;
+  doc["candidate_sequence"] = state.candidateSequence;
+  doc["candidate_age_ms"] = state.candidateAvailable ? millis() - state.candidateCapturedAtMs : 0;
+  doc["peak_rssi_dbm"] = state.currentPeakRssiDbm;
+  doc["weak_rssi_frames"] = state.weakRssiFrames;
+
+  server.sendHeader("Cache-Control", "no-store");
+  String output;
+  output.reserve(192);
+  serializeJson(doc, output);
+  server.send(200, "application/json", output);
 }
 
 void handleAnalyzerSettingsApi() {
@@ -565,7 +607,7 @@ void handleSlotSendApi() {
   if (!readSlotRequest(doc, slot)) return;
   SlotInfo info;
   if (!storageLoadSlot(slot, openrfScratch, OPENRF_MAX_RAW_PULSES, info)) { sendJsonError(404, "Slot is empty or invalid"); return; }
-  if (!Radio.sendRaw(openrfScratch, info.pulseCount, config.replayCount)) { sendJsonError(500, "RF transmission failed"); return; }
+  if (!rfCommandSendRaw(openrfScratch, info.pulseCount, config.replayCount)) { sendJsonError(500, "RF transmission failed"); return; }
   sendSuccess("Slot " + String(slot) + " transmitted");
   Serial.print("SLOT sent: "); Serial.println(slot);
 }
@@ -593,7 +635,13 @@ void handleSlotDeleteApi() {
 void handleRxSlotsApi() {
   server.setContentLength(CONTENT_LENGTH_UNKNOWN);
   server.send(200, "application/json", "");
-  server.sendContent("{\"count\":10,\"used_count\":" + String(rxSlotCountUsed()) + ",\"learn_state\":\"" + String(rxSlotLearnState()) + "\",\"learning_slot\":" + String(rxSlotLearningId()) + ",\"slots\":[");
+  server.sendContent("{\"count\":10,\"used_count\":" + String(rxSlotCountUsed()) +
+                     ",\"learn_state\":\"" + String(rxSlotLearnState()) +
+                     "\",\"learning_slot\":" + String(rxSlotLearningId()) +
+                     ",\"learn_min_rssi\":" + String(config.rxSlotLearnMinRssi) +
+                     ",\"weak_rejected\":" + String(rxSlotWeakLearnRejectedCount()) +
+                     ",\"last_weak_rssi\":" + String(rxSlotLastWeakLearnRssi(), 1) +
+                     ",\"slots\":[");
   for (uint8_t i=1;i<=OPENRF_RX_SLOT_COUNT;i++) {
     if (i>1) server.sendContent(",");
     RxSlotInfo x=rxSlotGetInfo(i); JsonDocument d;
@@ -608,9 +656,34 @@ void handleRxSlotsApi() {
 }
 void handleRxLearnApi() {
   JsonDocument body; if (deserializeJson(body, server.arg("plain"))) { sendJsonError(400,"Invalid JSON"); return; }
-  uint8_t slot=body["slot"]|0; String name=body["name"]|("RX Slot "+String(slot));
+  uint8_t slot=body["slot"]|0; String defaultName = String("RX Slot ") + String(slot); String name=body["name"]|defaultName;
   if (!rxSlotStartLearn(slot,name)) { sendJsonError(409,"RX learn is busy or unavailable"); return; }
   JsonDocument d; d["ok"]=true; d["message"]="Waiting for RF signal"; sendJsonDoc(200,d);
+}
+void handleRxLearnRssiApi() {
+  JsonDocument body;
+  if (deserializeJson(body, server.arg("plain"))) {
+    sendJsonError(400, "Invalid JSON");
+    return;
+  }
+
+  const int value = body["min_rssi"] | -75;
+  if (value < -100 || value > -20) {
+    sendJsonError(400, "RX Slot Learn RSSI must be between -100 and -20 dBm");
+    return;
+  }
+
+  config.rxSlotLearnMinRssi = static_cast<int8_t>(value);
+  if (!configSave()) {
+    sendJsonError(500, "Failed to save RX Slot Learn RSSI");
+    return;
+  }
+
+  JsonDocument response;
+  response["ok"] = true;
+  response["min_rssi"] = config.rxSlotLearnMinRssi;
+  response["message"] = "RX Slot Learn RSSI saved";
+  sendJsonDoc(200, response);
 }
 void handleRxDeleteApi(){ JsonDocument b;if(deserializeJson(b,server.arg("plain"))){sendJsonError(400,"Invalid JSON");return;} uint8_t slot=b["slot"]|0; bool ok=rxSlotDelete(slot); if(ok&&config.homeAssistantDiscovery)mqttPublishDiscovery(); JsonDocument d;d["ok"]=ok;d["message"]=ok?"RX slot deleted":"Delete failed";sendJsonDoc(ok?200:400,d);}
 void handleRxRenameApi(){ JsonDocument b;if(deserializeJson(b,server.arg("plain"))){sendJsonError(400,"Invalid JSON");return;} uint8_t slot=b["slot"]|0;String name=b["name"]|"";bool ok=rxSlotRename(slot,name);if(ok&&config.homeAssistantDiscovery)mqttPublishDiscovery();JsonDocument d;d["ok"]=ok;d["message"]=ok?"RX slot renamed":"Rename failed";sendJsonDoc(ok?200:400,d);}
@@ -746,7 +819,8 @@ void handleBackupDownload() {
   server.send(200, "application/octet-stream", "");
 
   String error;
-  if (!backupStreamToClient(server.client(), error)) {
+ WiFiClient client = server.client();
+if (!backupStreamToClient(client, error)) {
     Serial.print(F("Backup stream failed: "));
     Serial.println(error);
   } else {
@@ -797,15 +871,15 @@ void handleOtaUpload() {
   if (upload.status == UPLOAD_FILE_START) {
     otaUploadOk = false;
     otaUploadMessage = "Firmware upload started";
-    Radio.stopReceive();
+    rfCommandStopReceive();
     const uint32_t maxSketchSpace = (ESP.getFreeSketchSpace() - 0x1000) & 0xFFFFF000;
     if (!Update.begin(maxSketchSpace, U_FLASH)) {
-      otaUploadMessage = Update.getErrorString();
+      otaUploadMessage = Update.errorString();
       Update.printError(Serial);
     }
   } else if (upload.status == UPLOAD_FILE_WRITE) {
     if (!Update.hasError() && Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
-      otaUploadMessage = Update.getErrorString();
+      otaUploadMessage = Update.errorString();
       Update.printError(Serial);
     }
   } else if (upload.status == UPLOAD_FILE_END) {
@@ -813,14 +887,14 @@ void handleOtaUpload() {
       otaUploadOk = true;
       otaUploadMessage = "Firmware installed successfully. Restarting...";
     } else {
-      otaUploadMessage = Update.getErrorString();
+      otaUploadMessage = Update.errorString();
       Update.printError(Serial);
-      Radio.startReceive();
+      rfCommandStartReceive();
     }
   } else if (upload.status == UPLOAD_FILE_ABORTED) {
     Update.end(false);
     otaUploadMessage = "Firmware upload was aborted";
-    Radio.startReceive();
+    rfCommandStartReceive();
   }
 }
 
@@ -873,6 +947,7 @@ void webBegin() {
   server.on("/api/radio/learn/test-send", HTTP_POST, handleLearnTestSendApi);
   server.on("/api/debug/radio", HTTP_GET, handleRadioDebugApi);
   server.on("/api/analyzer", HTTP_GET, handleAnalyzerApi);
+  server.on("/api/analyzer/live", HTTP_GET, handleAnalyzerLiveApi);
   server.on("/api/analyzer/settings", HTTP_POST, handleAnalyzerSettingsApi);
   server.on("/api/slots", HTTP_GET, handleSlotsApi);
   server.on("/api/slots/save", HTTP_POST, handleSlotSaveApi);
@@ -881,6 +956,7 @@ void webBegin() {
   server.on("/api/slots/delete", HTTP_POST, handleSlotDeleteApi);
   server.on("/api/rxslots", HTTP_GET, handleRxSlotsApi);
   server.on("/api/rxslots/learn", HTTP_POST, handleRxLearnApi);
+  server.on("/api/rxslots/learn-rssi", HTTP_POST, handleRxLearnRssiApi);
   server.on("/api/rxslots/delete", HTTP_POST, handleRxDeleteApi);
   server.on("/api/rxslots/rename", HTTP_POST, handleRxRenameApi);
   server.on("/api/rxslots/enable", HTTP_POST, handleRxEnableApi);

@@ -1,13 +1,50 @@
 #include <Arduino.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+#include <esp_heap_caps.h>
 #include "analyzer.h"
 #include "universal_decoder.h"
 #include "config.h"
 
 namespace {
+SemaphoreHandle_t analyzerMutex = nullptr;
+
+class AnalyzerGuard {
+ public:
+  AnalyzerGuard() {
+    if (!analyzerMutex) analyzerMutex = xSemaphoreCreateRecursiveMutex();
+    if (analyzerMutex) xSemaphoreTakeRecursive(analyzerMutex, portMAX_DELAY);
+  }
+  ~AnalyzerGuard() {
+    if (analyzerMutex) xSemaphoreGiveRecursive(analyzerMutex);
+  }
+};
+
 AnalyzerSnapshot snapshot;
 AnalyzerCandidateSnapshot lastCandidate;
 uint32_t weakRssiFrames = 0;
 float peakRssiDbm = -127.0F;
+
+int16_t* snapshotRawStore = nullptr;
+int16_t* candidateRawStore = nullptr;
+int16_t* candidateNormalizedStore = nullptr;
+bool analyzerExternalRam = false;
+size_t analyzerAllocated = 0;
+
+int16_t* allocateAnalyzerPulseStore() {
+  const size_t bytes = OPENRF_ANALYZER_RAW_PREVIEW * sizeof(int16_t);
+  void* ptr = nullptr;
+  if (ESP.getPsramSize()) {
+    ptr = heap_caps_calloc(OPENRF_ANALYZER_RAW_PREVIEW, sizeof(int16_t),
+                           MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  }
+  if (!ptr) {
+    ptr = heap_caps_calloc(OPENRF_ANALYZER_RAW_PREVIEW, sizeof(int16_t),
+                           MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  }
+  if (ptr) analyzerAllocated += bytes;
+  return static_cast<int16_t*>(ptr);
+}
 
 constexpr uint8_t REJECT_CLUSTER_COUNT = 4;
 constexpr uint32_t STRUCTURED_WINDOW_MS = 2500;
@@ -139,7 +176,7 @@ void analyzeAlternation(const int16_t* pulses, uint16_t count, AnalyzerCandidate
       merged += pulses[i];
     } else {
       alternatingPairs++;
-      if (normalizedCount < OPENRF_ANALYZER_RAW_PREVIEW) {
+      if (out.normalizedPulses && normalizedCount < OPENRF_ANALYZER_RAW_PREVIEW) {
         if (merged > INT16_MAX) merged = INT16_MAX;
         if (merged < INT16_MIN) merged = INT16_MIN;
         out.normalizedPulses[normalizedCount++] = static_cast<int16_t>(merged);
@@ -148,7 +185,7 @@ void analyzeAlternation(const int16_t* pulses, uint16_t count, AnalyzerCandidate
       currentRun = 1;
     }
   }
-  if (normalizedCount < OPENRF_ANALYZER_RAW_PREVIEW) {
+  if (out.normalizedPulses && normalizedCount < OPENRF_ANALYZER_RAW_PREVIEW) {
     if (merged > INT16_MAX) merged = INT16_MAX;
     if (merged < INT16_MIN) merged = INT16_MIN;
     out.normalizedPulses[normalizedCount++] = static_cast<int16_t>(merged);
@@ -170,9 +207,43 @@ String binaryString(uint64_t code, uint8_t bits) {
 }
 }  // namespace
 
+bool analyzerBegin() {
+  if (snapshotRawStore && candidateRawStore && candidateNormalizedStore) return true;
+
+  snapshotRawStore = allocateAnalyzerPulseStore();
+  candidateRawStore = allocateAnalyzerPulseStore();
+  candidateNormalizedStore = allocateAnalyzerPulseStore();
+  if (!snapshotRawStore || !candidateRawStore || !candidateNormalizedStore) {
+    Serial.println(F("FATAL: Analyzer pulse-store allocation failed"));
+    return false;
+  }
+
+  snapshot.rawPulses = snapshotRawStore;
+  lastCandidate.rawPulses = candidateRawStore;
+  lastCandidate.normalizedPulses = candidateNormalizedStore;
+
+  analyzerExternalRam =
+      esp_ptr_external_ram(snapshotRawStore) &&
+      esp_ptr_external_ram(candidateRawStore) &&
+      esp_ptr_external_ram(candidateNormalizedStore);
+
+  Serial.print(F("Analyzer pulse stores: "));
+  Serial.print(analyzerAllocated);
+  Serial.print(F(" bytes, "));
+  Serial.println(analyzerExternalRam ? F("PSRAM") : F("internal RAM fallback"));
+  return true;
+}
+
+size_t analyzerPsramAllocatedBytes() { return analyzerAllocated; }
+bool analyzerUsingExternalRam() { return analyzerExternalRam; }
+
 void analyzerReset() {
+  AnalyzerGuard guard;
   snapshot = AnalyzerSnapshot{};
   lastCandidate = AnalyzerCandidateSnapshot{};
+  snapshot.rawPulses = snapshotRawStore;
+  lastCandidate.rawPulses = candidateRawStore;
+  lastCandidate.normalizedPulses = candidateNormalizedStore;
   weakRssiFrames = 0;
   peakRssiDbm = -127.0F;
   for (auto& cluster : rejectedClusters) cluster = RejectedCluster{};
@@ -181,9 +252,12 @@ void analyzerReset() {
 void analyzerRecordCandidate(const int16_t* pulses, uint16_t count, uint32_t durationUs,
                              float frequencyMHz, float rssiDbm,
                              const String& rejectReason) {
+  AnalyzerGuard guard;
   if (config.analyzerFreezeCandidate && lastCandidate.available) return;
   const uint32_t nextSequence = lastCandidate.sequence + 1;
   lastCandidate = AnalyzerCandidateSnapshot{};
+  lastCandidate.rawPulses = candidateRawStore;
+  lastCandidate.normalizedPulses = candidateNormalizedStore;
   lastCandidate.available = true;
   lastCandidate.sequence = nextSequence;
   lastCandidate.capturedAtMs = millis();
@@ -208,14 +282,17 @@ void analyzerRecordCandidate(const int16_t* pulses, uint16_t count, uint32_t dur
   }
 }
 
-AnalyzerCandidateSnapshot analyzerGetLastCandidate() { return lastCandidate; }
+AnalyzerCandidateSnapshot analyzerGetLastCandidate() {
+  AnalyzerGuard guard; return lastCandidate; }
 
 bool analyzerRssiPasses(float rssiDbm) {
+  AnalyzerGuard guard;
   if (rssiDbm > peakRssiDbm) peakRssiDbm = rssiDbm;
   return rssiDbm >= static_cast<float>(config.analyzerMinRssi);
 }
 
 void analyzerRecordWeakRssi(float rssiDbm) {
+  AnalyzerGuard guard;
   if (weakRssiFrames < UINT32_MAX) weakRssiFrames++;
   if (rssiDbm > peakRssiDbm) peakRssiDbm = rssiDbm;
 }
@@ -223,11 +300,13 @@ void analyzerRecordWeakRssi(float rssiDbm) {
 void analyzerProcess(const int16_t* pulses, uint16_t count, uint32_t durationUs,
                      float frequencyMHz, float rssiDbm, bool accepted,
                      const String& rejectReason) {
+  AnalyzerGuard guard;
   const uint32_t decodedBefore = snapshot.decodedFrames;
   const uint32_t unknownBefore = snapshot.unknownFrames;
   const uint32_t nextSequence = snapshot.sequence + 1;
 
   snapshot = AnalyzerSnapshot{};
+  snapshot.rawPulses = snapshotRawStore;
   snapshot.available = true;
   snapshot.sequence = nextSequence;
   snapshot.capturedAtMs = millis();
@@ -300,6 +379,7 @@ void analyzerProcess(const int16_t* pulses, uint16_t count, uint32_t durationUs,
 bool analyzerConsiderRejected(const int16_t* pulses, uint16_t count, uint32_t durationUs,
                               float frequencyMHz, float rssiDbm,
                               const String& rejectReason) {
+  AnalyzerGuard guard;
   uint16_t classes[6] = {0};
   uint8_t classCount = 0;
   AnalyzerCandidateSnapshot metrics;
@@ -366,8 +446,24 @@ bool analyzerConsiderRejected(const int16_t* pulses, uint16_t count, uint32_t du
 }
 
 AnalyzerSnapshot analyzerGetSnapshot() {
+  AnalyzerGuard guard;
   AnalyzerSnapshot current = snapshot;
   current.weakRssiFrames = weakRssiFrames;
   current.peakRssiDbm = peakRssiDbm;
   return current;
+}
+
+
+AnalyzerLiveState analyzerGetLiveState() {
+  AnalyzerGuard guard;
+  AnalyzerLiveState state;
+  state.available = snapshot.available;
+  state.sequence = snapshot.sequence;
+  state.capturedAtMs = snapshot.capturedAtMs;
+  state.candidateAvailable = lastCandidate.available;
+  state.candidateSequence = lastCandidate.sequence;
+  state.candidateCapturedAtMs = lastCandidate.capturedAtMs;
+  state.currentPeakRssiDbm = peakRssiDbm;
+  state.weakRssiFrames = weakRssiFrames;
+  return state;
 }

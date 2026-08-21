@@ -2,6 +2,8 @@
 
 #include <Arduino.h>
 
+struct RFEventMessage;
+
 void mqttBegin();
 void mqttLoop();
 bool mqttIsConnected();
@@ -11,3 +13,5 @@ int mqttLastError();
 void mqttPublishStatus();
 
 void mqttPublishDiscovery();
+
+void mqttHandleRFEvent(const RFEventMessage& event);

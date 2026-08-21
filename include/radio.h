@@ -6,7 +6,11 @@
 // radio.cpp. A 600-pulse buffer keeps a safety margin while avoiding four
 // separate 4 kB RAW buffers. This saves about 11.2 kB of RAM across RX, last
 // frame, Learn and the shared scratch buffer.
-constexpr uint16_t OPENRF_MAX_RAW_PULSES = 600;
+// ISR capture stays deliberately bounded in fast internal RAM.
+constexpr uint16_t OPENRF_ISR_CAPTURE_PULSES = 600;
+
+// Non-ISR RAW/Learn/System working buffers live in PSRAM and may be larger.
+constexpr uint16_t OPENRF_MAX_RAW_PULSES = 2048;
 
 enum class RadioMode : uint8_t { OFFLINE, IDLE, RX, TX, ERROR };
 enum class LearnState : uint8_t { IDLE, WAITING_FOR_SIGNAL, PREVIEW_READY, ACCEPTED_RAM };

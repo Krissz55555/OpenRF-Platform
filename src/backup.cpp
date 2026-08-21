@@ -1,6 +1,6 @@
 #include <Arduino.h>
 #include <LittleFS.h>
-#include <ESP8266WiFi.h>
+#include <WiFi.h>
 
 #include "backup.h"
 #include "storage.h"
@@ -136,6 +136,10 @@ void removeRestoreTemps() {
     String temp = restorePathFor(slotPath(slot));
     if (LittleFS.exists(temp)) LittleFS.remove(temp);
   }
+  for (uint8_t slot = 1; slot <= 10; slot++) {
+    String temp = restorePathFor(rxSlotPath(slot));
+    if (LittleFS.exists(temp)) LittleFS.remove(temp);
+  }
 }
 
 bool validateBackup(File& file, BackupHeader& header, String& error) {
@@ -147,7 +151,7 @@ bool validateBackup(File& file, BackupHeader& header, String& error) {
     error = "Unsupported or invalid OpenRF backup file";
     return false;
   }
-  if (header.fileCount == 0 || header.fileCount > OPENRF_SLOT_COUNT + 1) {
+  if (header.fileCount == 0 || header.fileCount > OPENRF_SLOT_COUNT + 10 + 1) {
     error = "Invalid backup file count";
     return false;
   }
@@ -195,6 +199,12 @@ size_t backupCalculateSize(uint16_t& fileCount) {
   }
   for (uint8_t slot = 1; slot <= OPENRF_SLOT_COUNT; slot++) {
     const String path = slotPath(slot);
+    if (!includePath(path)) continue;
+    total += recordSize(path);
+    fileCount++;
+  }
+  for (uint8_t slot = 1; slot <= 10; slot++) {
+    const String path = rxSlotPath(slot);
     if (!includePath(path)) continue;
     total += recordSize(path);
     fileCount++;
@@ -293,6 +303,18 @@ bool backupRestoreFromFile(const char* uploadPath, String& error) {
     const String tempPath = restorePathFor(finalPath);
     if (LittleFS.exists(tempPath) && !LittleFS.rename(tempPath, finalPath)) {
       error = "Could not activate restored slot " + String(slot);
+      removeRestoreTemps(); return false;
+    }
+  }
+  for (uint8_t slot = 1; slot <= 10; slot++) {
+    const String finalPath = rxSlotPath(slot);
+    if (LittleFS.exists(finalPath)) LittleFS.remove(finalPath);
+  }
+  for (uint8_t slot = 1; slot <= 10; slot++) {
+    const String finalPath = rxSlotPath(slot);
+    const String tempPath = restorePathFor(finalPath);
+    if (LittleFS.exists(tempPath) && !LittleFS.rename(tempPath, finalPath)) {
+      error = "Could not activate restored RX slot " + String(slot);
       removeRestoreTemps(); return false;
     }
   }

@@ -1,7 +1,7 @@
 #include <Arduino.h>
-#include <ESP8266WiFi.h>
+#include <WiFi.h>
 #include "config.h"
-#include "wifi.h"
+#include "openrf_wifi.h"
 
 namespace {
 const char* AP_SSID = "OpenRF-Platform";
@@ -38,7 +38,7 @@ void stopSetupAccessPoint() {
 void wifiBegin() {
   WiFi.persistent(false);
   WiFi.setAutoReconnect(true);
-  WiFi.hostname(config.hostname);
+  WiFi.setHostname(config.hostname.c_str());
 
   if (config.wifiSsid.length() == 0) {
     WiFi.mode(WIFI_AP);

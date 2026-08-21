@@ -17,6 +17,7 @@ struct AppConfig {
 
   uint8_t replayCount;
   uint16_t radioFrequencyMhz;
+  int8_t rxSlotLearnMinRssi;
 
   int8_t analyzerMinRssi;
   uint16_t analyzerMinPulseCount;

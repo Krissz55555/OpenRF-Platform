@@ -1,4 +1,6 @@
 #include <Arduino.h>
+#include "dualcore.h"
+#include "config.h"
 #include <LittleFS.h>
 #include "rxslots.h"
 #include "radio.h"
@@ -9,11 +11,10 @@ namespace {
 constexpr uint32_t MAGIC_V3 = 0x52585033UL; // RXP3
 constexpr uint32_t MAGIC_V2 = 0x52585032UL; // RXP2
 constexpr uint8_t VERSION_V3 = 3;
-// Normal decoded RF events use a short per-slot lockout. NVKP01 is handled
-// separately: a physical click must produce two short Kinetic captures
-// (mechanical press + release) within the confirmation window before an RX
-// Slot, MQTT or Home Assistant event is emitted.
-constexpr uint16_t LOCKOUT_MS = 700;
+// ESP32-S3: the generic per-slot lockout used by the ESP8266 build is removed.
+// Every independently decoded actionable frame is allowed through immediately.
+// Protocol-specific de-duplication/confirmation (for example NVKP01) remains.
+constexpr uint16_t LOCKOUT_MS = 0;
 constexpr uint16_t NVKP_CONFIRM_WINDOW_MS = 1000;
 constexpr uint16_t NVKP_MIN_PULSES = 28;
 constexpr uint16_t NVKP_MAX_PULSES = 70;
@@ -51,7 +52,6 @@ struct HeaderV2 {
   char name[33];
 };
 
-uint32_t lastSequence = 0;
 uint32_t lastMatchedAt[OPENRF_RX_SLOT_COUNT + 1] = {};
 uint32_t matchCounts[OPENRF_RX_SLOT_COUNT + 1] = {};
 float lastRssi[OPENRF_RX_SLOT_COUNT + 1] = {};
@@ -59,6 +59,8 @@ uint8_t lastQuality[OPENRF_RX_SLOT_COUNT + 1] = {};
 uint8_t learningSlot = 0;
 String learningName;
 String learnState = "idle";
+uint32_t weakLearnRejected = 0;
+float lastWeakLearnRssi = -127.0F;
 uint32_t nvkpPendingAtMs = 0;
 bool nvkpPending = false;
 
@@ -201,70 +203,116 @@ void rxSlotsBegin() {
 }
 
 void rxSlotsLoop() {
-  if (learningSlot) {
-    const LearnCaptureInfo capture = Radio.getLearnCaptureInfo();
-    if (capture.state == LearnState::PREVIEW_READY && capture.available) {
-      const uint16_t count = Radio.copyLearnRaw(openrfScratch, OPENRF_MAX_RAW_PULSES);
-      const DecodedRFEvent decoded = universalDecode(openrfScratch, count);
-      if (!decoded.valid) {
-        learnState = "unsupported_protocol"; learningSlot = 0; learningName = "";
-        Radio.discardLearnCapture(); return;
+  // Step 3: RF processing is event-driven via rxSlotsHandleRFEvent().
+}
+
+void rxSlotsHandleRFEvent(const RFEventMessage& event) {
+  if (event.type == RFEventType::LEARN_PREVIEW) {
+    if (!learningSlot || event.pulseCount == 0) return;
+
+    // RX Slot Learn has its own absolute RSSI floor in addition to the
+    // RadioManager noise-floor + 6 dB rule. Weak captures are ignored and
+    // Learn is automatically re-armed instead of saving a bad/noisy frame.
+    if (event.rssiDbm < static_cast<float>(config.rxSlotLearnMinRssi)) {
+      weakLearnRejected++;
+      lastWeakLearnRssi = event.rssiDbm;
+      learnState = "waiting_for_signal";
+
+      Serial.print(F("RX learn weak signal ignored: "));
+      Serial.print(event.rssiDbm, 1);
+      Serial.print(F(" dBm < "));
+      Serial.print(config.rxSlotLearnMinRssi);
+      Serial.println(F(" dBm"));
+
+      const bool discarded = rfCommandDiscardLearn();
+      const bool restarted = discarded && rfCommandStartLearn();
+      if (!restarted) {
+        learnState = "radio_error";
+        learningSlot = 0;
+        learningName = "";
       }
-      if (duplicateExists(learningSlot, decoded)) {
-        learnState = "duplicate_code"; learningSlot = 0; learningName = "";
-        Radio.discardLearnCapture(); return;
-      }
-      const uint8_t completedSlot = learningSlot;
-      const bool ok = saveDecoded(completedSlot, learningName, decoded);
-      learnState = ok ? "saved" : "save_error";
-      Serial.print(F("RX learn slot ")); Serial.print(completedSlot);
-      Serial.print(ok ? F(" saved: ") : F(" failed: "));
-      Serial.print(decoded.protocol); Serial.print(F(" device=")); Serial.print(decoded.deviceId);
-      Serial.print(F(" command=")); Serial.println(decoded.command);
-      learningSlot = 0; learningName = ""; Radio.discardLearnCapture();
-      if (ok) mqttPublishDiscovery();
+      return;
     }
+
+    const DecodedRFEvent decoded =
+        universalDecode(event.pulses, event.pulseCount);
+
+    if (!decoded.valid) {
+      learnState = "unsupported_protocol";
+      learningSlot = 0;
+      learningName = "";
+      rfCommandDiscardLearn();
+      return;
+    }
+
+    if (duplicateExists(learningSlot, decoded)) {
+      learnState = "duplicate_code";
+      learningSlot = 0;
+      learningName = "";
+      rfCommandDiscardLearn();
+      return;
+    }
+
+    const uint8_t completedSlot = learningSlot;
+    const bool ok = saveDecoded(completedSlot, learningName, decoded);
+    learnState = ok ? "saved" : "save_error";
+
+    Serial.print(F("RX learn slot ")); Serial.print(completedSlot);
+    Serial.print(ok ? F(" saved: ") : F(" failed: "));
+    Serial.print(decoded.protocol); Serial.print(F(" device="));
+    Serial.print(decoded.deviceId); Serial.print(F(" command="));
+    Serial.println(decoded.command);
+
+    learningSlot = 0;
+    learningName = "";
+    rfCommandDiscardLearn();
+    if (ok) mqttPublishDiscovery();
     return;
   }
 
-  const RawFrameInfo frame = Radio.getLastFrameInfo();
-  if (!frame.available || frame.sequence == lastSequence) return;
-  lastSequence = frame.sequence;
-  const uint16_t count = Radio.copyLastRaw(openrfScratch, OPENRF_MAX_RAW_PULSES);
-  if (!count) return;
-  const DecodedRFEvent decoded = universalDecode(openrfScratch, count);
+  if (event.type != RFEventType::RX_FRAME || event.pulseCount == 0) return;
+
+  const DecodedRFEvent decoded =
+      universalDecode(event.pulses, event.pulseCount);
   if (!decoded.valid) return;
 
-  // NVKP01 is intentionally stricter for actionable gateway events than for
-  // Analyzer recognition. Long remote-control trains are rejected by the
-  // short-frame envelope, and one isolated marker-like burst cannot trigger
-  // MQTT or Home Assistant. A real click is confirmed by its press/release
-  // capture pair within one second.
-  if (decoded.kinetic && decoded.protocol.equalsIgnoreCase("NVKP01 Kinetic") &&
-      !confirmNvkpEvent(openrfScratch, count, frame.durationUs, millis())) {
+  if (decoded.kinetic &&
+      decoded.protocol.equalsIgnoreCase("NVKP01 Kinetic") &&
+      !confirmNvkpEvent(event.pulses, event.pulseCount,
+                        event.durationUs, millis())) {
     return;
   }
 
   for (uint8_t slot = 1; slot <= OPENRF_RX_SLOT_COUNT; slot++) {
     HeaderV3 h{};
     if (!readHeader(slot, h) || !h.enabled) continue;
-    if (!decodedEventMatches(decoded, h.protocol, h.deviceId, h.command, h.code, h.matchCode)) continue;
-    if (millis() - lastMatchedAt[slot] < LOCKOUT_MS) continue;
-    lastMatchedAt[slot] = millis(); matchCounts[slot]++;
-    lastRssi[slot] = frame.rssiDbm; lastQuality[slot] = decoded.quality;
+    if (!decodedEventMatches(decoded, h.protocol, h.deviceId, h.command,
+                             h.code, h.matchCode)) continue;
+    if (LOCKOUT_MS && millis() - lastMatchedAt[slot] < LOCKOUT_MS) continue;
+
+    lastMatchedAt[slot] = millis();
+    matchCounts[slot]++;
+    lastRssi[slot] = event.rssiDbm;
+    lastQuality[slot] = decoded.quality;
+
     const RxSlotInfo info = rxSlotGetInfo(slot);
     Serial.print(F("RX universal match: slot ")); Serial.print(slot);
     Serial.print(F(", ")); Serial.print(decoded.protocol);
     Serial.print(F(", device=")); Serial.print(decoded.deviceId);
     Serial.print(F(", command=")); Serial.println(decoded.command);
-    mqttPublishRxSlotEvent(slot, info); return;
+    mqttPublishRxSlotEvent(slot, info);
+    return;
   }
 }
 
 bool rxSlotStartLearn(uint8_t slot, const String& name) {
-  if (!valid(slot) || learningSlot || !Radio.startLearning()) return false;
-  learningSlot = slot; learningName = name.length() ? name : ("RX Slot " + String(slot));
-  learnState = "waiting_for_signal"; return true;
+  if (!valid(slot) || learningSlot || !rfCommandStartLearn()) return false;
+  learningSlot = slot;
+  learningName = name.length() ? name : ("RX Slot " + String(slot));
+  learnState = "waiting_for_signal";
+  weakLearnRejected = 0;
+  lastWeakLearnRssi = -127.0F;
+  return true;
 }
 bool rxSlotDelete(uint8_t slot) { return valid(slot) && (!LittleFS.exists(path(slot)) || LittleFS.remove(path(slot))); }
 bool rxSlotRename(uint8_t slot, const String& name) {
@@ -287,3 +335,6 @@ RxSlotInfo rxSlotGetInfo(uint8_t slot) {
 uint8_t rxSlotCountUsed() { uint8_t n=0; for(uint8_t i=1;i<=OPENRF_RX_SLOT_COUNT;i++){HeaderV3 h{};if(readHeader(i,h))n++;}return n; }
 const char* rxSlotLearnState() { return learnState.c_str(); }
 uint8_t rxSlotLearningId() { return learningSlot; }
+
+uint32_t rxSlotWeakLearnRejectedCount() { return weakLearnRejected; }
+float rxSlotLastWeakLearnRssi() { return lastWeakLearnRssi; }

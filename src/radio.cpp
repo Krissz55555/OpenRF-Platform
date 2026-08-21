@@ -1,13 +1,31 @@
 #include <Arduino.h>
 #include <RadioLib.h>
+#include <SPI.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 #include "hardware.h"
+#include "dualcore.h"
 #include "radio.h"
 #include "analyzer.h"
+#include "psram_buffers.h"
 #include "config.h"
 #include "universal_decoder.h"
 
 namespace {
+SemaphoreHandle_t radioMutex = nullptr;
+portMUX_TYPE rxMux = portMUX_INITIALIZER_UNLOCKED;
+
+class RadioGuard {
+ public:
+  RadioGuard() {
+    if (radioMutex) xSemaphoreTakeRecursive(radioMutex, portMAX_DELAY);
+  }
+  ~RadioGuard() {
+    if (radioMutex) xSemaphoreGiveRecursive(radioMutex);
+  }
+};
+
 CC1101 cc1101 = new Module(OPENRF_CC1101_CS_PIN, OPENRF_CC1101_GDO0_PIN,
                            RADIOLIB_NC, OPENRF_CC1101_GDO2_PIN);
 
@@ -24,7 +42,7 @@ constexpr uint32_t NOISE_US = 150;
 constexpr float LEARN_RSSI_DELTA_DB = 6.0F;
 constexpr uint16_t MAX_CLUSTER_COUNT = 12;
 
-volatile int16_t rxPulses[OPENRF_MAX_RAW_PULSES];
+volatile int16_t rxPulses[OPENRF_ISR_CAPTURE_PULSES];
 volatile uint16_t rxCount = 0;
 volatile uint32_t lastEdgeUs = 0;
 volatile int lastLevel = LOW;
@@ -36,13 +54,17 @@ volatile uint32_t timeoutFinalizedFrames = 0;
 volatile uint32_t bufferFullFrames = 0;
 volatile uint32_t mergedSameSignPulses = 0;
 
-int16_t lastRaw[OPENRF_MAX_RAW_PULSES];
+int16_t* lastRaw = nullptr;
 RawFrameInfo lastFrame;
-int16_t learnRaw[OPENRF_MAX_RAW_PULSES];
+int16_t* learnRaw = nullptr;
 LearnCaptureInfo learnCapture;
 
 void IRAM_ATTR gdo0ISR() {
-  if (!captureEnabled) return;
+  portENTER_CRITICAL_ISR(&rxMux);
+  if (!captureEnabled) {
+    portEXIT_CRITICAL_ISR(&rxMux);
+    return;
+  }
 
   const uint32_t now = micros();
   const uint32_t duration = now - lastEdgeUs;
@@ -53,10 +75,14 @@ void IRAM_ATTR gdo0ISR() {
   // one real pulse into fragments and can create artificial same-sign pairs.
   if (duration < NOISE_US) {
     ignoredGlitchEdges++;
+    portEXIT_CRITICAL_ISR(&rxMux);
     return;
   }
 
-  if (frameReady) return;
+  if (frameReady) {
+    portEXIT_CRITICAL_ISR(&rxMux);
+    return;
+  }
 
   // This is now an accepted edge, so it becomes the reference for the next
   // measured pulse.
@@ -72,10 +98,11 @@ void IRAM_ATTR gdo0ISR() {
       rxCount = 0;
     }
     lastLevel = level;
+    portEXIT_CRITICAL_ISR(&rxMux);
     return;
   }
 
-  if (rxCount < OPENRF_MAX_RAW_PULSES) {
+  if (rxCount < OPENRF_ISR_CAPTURE_PULSES) {
     const int32_t signedDuration = (lastLevel == HIGH)
         ? static_cast<int32_t>(duration)
         : -static_cast<int32_t>(duration);
@@ -94,18 +121,39 @@ void IRAM_ATTR gdo0ISR() {
       rxPulses[rxCount++] = static_cast<int16_t>(signedDuration);
     }
 
-    if (rxCount >= OPENRF_MAX_RAW_PULSES) {
+    if (rxCount >= OPENRF_ISR_CAPTURE_PULSES) {
       frameReady = true;
       bufferFullFrames++;
     }
   }
   lastLevel = level;
+  portEXIT_CRITICAL_ISR(&rxMux);
 }
 }  // namespace
 
 RadioManager Radio;
 
 bool RadioManager::begin() {
+  lastRaw = psramRadioLastRaw();
+  learnRaw = psramRadioLearnRaw();
+  if (!lastRaw || !learnRaw) {
+    Serial.println(F("Radio PSRAM working buffers unavailable"));
+    return false;
+  }
+  if (!radioMutex) {
+    radioMutex = xSemaphoreCreateRecursiveMutex();
+    if (!radioMutex) {
+      Serial.println(F("Radio mutex creation failed"));
+      return false;
+    }
+  }
+  RadioGuard guard;
+
+  // ESP32-S3 does not use the ESP8266 hardware-SPI pin mapping. Bind the
+  // default Arduino SPI object explicitly to the OpenRF v2 prototype pins.
+  SPI.begin(OPENRF_CC1101_SCK_PIN, OPENRF_CC1101_MISO_PIN,
+            OPENRF_CC1101_MOSI_PIN, OPENRF_CC1101_CS_PIN);
+
   frequencyMHz_ = config.radioFrequencyMhz == 868 ? 868.35F : 433.92F;
   initialized_ = false;
   mode_ = RadioMode::OFFLINE;
@@ -157,29 +205,32 @@ bool RadioManager::begin() {
 }
 
 void RadioManager::loop() {
+  RadioGuard guard;
   if (!initialized_ || mode_ != RadioMode::RX) return;
   const uint32_t nowMs = millis();
   if (nowMs - lastRssiReadMs_ >= RSSI_REFRESH_INTERVAL_MS) {
     lastRssiReadMs_ = nowMs;
     lastRssi_ = cc1101.getRSSI();
     uint16_t activeCount;
-    noInterrupts(); activeCount = rxCount; interrupts();
+    portENTER_CRITICAL(&rxMux);
+    activeCount = rxCount;
+    portEXIT_CRITICAL(&rxMux);
     if (activeCount > 0 && lastRssi_ > framePeakRssi_) framePeakRssi_ = lastRssi_;
   }
 
   bool readyCopy;
   uint16_t countCopy;
   uint32_t edgeCopy;
-  noInterrupts();
+  portENTER_CRITICAL(&rxMux);
   readyCopy = frameReady; countCopy = rxCount; edgeCopy = lastEdgeUs;
-  interrupts();
+  portEXIT_CRITICAL(&rxMux);
 
   if (!readyCopy && countCopy >= MIN_CAPTURE_PULSES &&
       static_cast<uint32_t>(micros() - edgeCopy) > FRAME_GAP_US) {
-    noInterrupts();
+    portENTER_CRITICAL(&rxMux);
     frameReady = true;
     timeoutFinalizedFrames++;
-    interrupts();
+    portEXIT_CRITICAL(&rxMux);
     readyCopy = true;
   }
   if (readyCopy) finalizeFrame();
@@ -272,13 +323,13 @@ bool RadioManager::validateLearnSignal(float frameRssi, String& reason) const {
 
 void RadioManager::finalizeFrame() {
   uint16_t count = 0;
-  noInterrupts();
+  portENTER_CRITICAL(&rxMux);
   count = rxCount;
   if (count > OPENRF_MAX_RAW_PULSES) count = OPENRF_MAX_RAW_PULSES;
   for (uint16_t i = 0; i < count; i++) lastRaw[i] = rxPulses[i];
   rxCount = 0; frameReady = false; lastEdgeUs = micros();
   lastLevel = digitalRead(OPENRF_CC1101_GDO0_PIN);
-  interrupts();
+  portEXIT_CRITICAL(&rxMux);
 
   uint32_t totalDuration = 0;
   for (uint16_t i = 0; i < count; i++)
@@ -289,13 +340,13 @@ void RadioManager::finalizeFrame() {
   const float frameRssi = framePeakRssi_;
   framePeakRssi_ = -127.0F;
   diagnostics_.rawCandidates++;
-  noInterrupts();
+  portENTER_CRITICAL(&rxMux);
   diagnostics_.ignoredGlitchEdges = ignoredGlitchEdges;
   diagnostics_.gapFinalizedFrames = gapFinalizedFrames;
   diagnostics_.timeoutFinalizedFrames = timeoutFinalizedFrames;
   diagnostics_.bufferFullFrames = bufferFullFrames;
   diagnostics_.mergedSameSignPulses = mergedSameSignPulses;
-  interrupts();
+  portEXIT_CRITICAL(&rxMux);
 
   String rejectReason;
   const bool learningNow =
@@ -334,9 +385,8 @@ void RadioManager::finalizeFrame() {
     diagnostics_.backgroundFilteredFrames++;
   }
 
-  // Standard mode intentionally preserves the v1.0.0 Analyzer behaviour.
-  // Analyzer v2 candidate capture and additional filters are enabled only by
-  // the explicit Developer Mode switch.
+  // Analyzer processing is optional. On ESP32-S3 this switch only enables or
+  // disables Analyzer diagnostics; it no longer changes gateway operation.
   if (config.analyzerDeveloperMode) {
     analyzerRecordCandidate(
         lastRaw,
@@ -349,8 +399,7 @@ void RadioManager::finalizeFrame() {
   }
 
   if (!frameValid) {
-    // In standard mode rejected bursts remain diagnostics only, exactly as in
-    // v1.0.0. Learn mode may still expose the rejected capture. Developer Mode
+    // Rejected bursts remain normal diagnostics. When Analyzer is enabled it
     // can additionally classify repeatable rejected candidates.
     if (config.analyzerDeveloperMode) {
       if (analyzerRssiPasses(frameRssi)) {
@@ -376,9 +425,8 @@ void RadioManager::finalizeFrame() {
     return;
   }
 
-  // Full Analyzer processing is intentionally disabled in normal gateway
-  // mode. This keeps the ESP8266 stable for RX Slots, MQTT and Home Assistant.
-  // Developer Mode enables the complete diagnostics pipeline exclusively.
+  // Full Analyzer processing is optional and non-exclusive on ESP32-S3.
+  // Gateway, RX Slots, MQTT and Home Assistant continue running in parallel.
   if (config.analyzerDeveloperMode) {
     if (analyzerRssiPasses(frameRssi)) {
       analyzerProcess(lastRaw, count, totalDuration, frequencyMHz_, frameRssi,
@@ -394,6 +442,12 @@ void RadioManager::finalizeFrame() {
   lastFrame.durationUs = totalDuration;
   lastFrame.rssiDbm = frameRssi;
   lastFrame.receivedAtMs = millis();
+
+  // Immutable frame snapshot leaves Core 1 through rfEventQueue. Core 0 no
+  // longer polls RadioManager for gateway event processing.
+  rfEventPublishFrame(RFEventType::RX_FRAME, lastFrame.sequence,
+                      lastRaw, count, totalDuration, frameRssi,
+                      frequencyMHz_, lastFrame.receivedAtMs);
 
   Serial.print("RAW frame #"); Serial.print(lastFrame.sequence);
   Serial.print(" accepted: "); Serial.print(count); Serial.print(" pulses, ");
@@ -416,20 +470,26 @@ void RadioManager::finalizeFrame() {
     learnCapture.rssiDbm = frameRssi;
     learnCapture.capturedAtMs = millis();
     learnCapture.lastRejectReason = "";
+
+    rfEventPublishFrame(RFEventType::LEARN_PREVIEW, learnCapture.sequence,
+                        learnRaw, count, totalDuration, frameRssi,
+                        frequencyMHz_, learnCapture.capturedAtMs);
+
     Serial.print("LEARN preview ready: "); Serial.print(count); Serial.println(" pulses");
   }
 }
 
 bool RadioManager::startReceive() {
+  RadioGuard guard;
   if (!initialized_) return false;
   detachInterrupt(digitalPinToInterrupt(OPENRF_CC1101_GDO0_PIN));
   pinMode(OPENRF_CC1101_GDO0_PIN, INPUT);
   lastError_ = cc1101.receiveDirectAsync();
   if (lastError_ != RADIOLIB_ERR_NONE) { mode_ = RadioMode::ERROR; return false; }
-  noInterrupts();
+  portENTER_CRITICAL(&rxMux);
   rxCount = 0; frameReady = false; captureEnabled = true;
   lastLevel = digitalRead(OPENRF_CC1101_GDO0_PIN); lastEdgeUs = micros();
-  interrupts();
+  portEXIT_CRITICAL(&rxMux);
   framePeakRssi_ = -127.0F;
   attachInterrupt(digitalPinToInterrupt(OPENRF_CC1101_GDO0_PIN), gdo0ISR, CHANGE);
   mode_ = RadioMode::RX;
@@ -437,9 +497,12 @@ bool RadioManager::startReceive() {
 }
 
 bool RadioManager::stopReceive() {
+  RadioGuard guard;
   if (!initialized_) return false;
   detachInterrupt(digitalPinToInterrupt(OPENRF_CC1101_GDO0_PIN));
-  noInterrupts(); captureEnabled = false; rxCount = 0; frameReady = false; interrupts();
+  portENTER_CRITICAL(&rxMux);
+  captureEnabled = false; rxCount = 0; frameReady = false;
+  portEXIT_CRITICAL(&rxMux);
   lastError_ = cc1101.standby();
   if (lastError_ != RADIOLIB_ERR_NONE) { mode_ = RadioMode::ERROR; return false; }
   mode_ = RadioMode::IDLE;
@@ -452,6 +515,7 @@ void RadioManager::waitUs(uint32_t durationUs) {
 }
 
 bool RadioManager::sendRaw(const int16_t* pulses, uint16_t pulseCount, uint8_t repeats) {
+  RadioGuard guard;
   if (!initialized_ || !pulses || pulseCount == 0 || pulseCount > OPENRF_MAX_RAW_PULSES) return false;
   if (repeats < 1) repeats = 1;
   if (repeats > 10) repeats = 10;
@@ -487,18 +551,20 @@ bool RadioManager::sendRaw(const int16_t* pulses, uint16_t pulseCount, uint8_t r
 }
 
 bool RadioManager::testSendLearnCapture(uint8_t repeats) {
+  RadioGuard guard;
   if (!learnCapture.available ||
       (learnCapture.state != LearnState::PREVIEW_READY &&
        learnCapture.state != LearnState::ACCEPTED_RAM)) return false;
   return sendRaw(learnRaw, learnCapture.pulseCount, repeats);
 }
 
-bool RadioManager::isInitialized() const { return initialized_; }
-bool RadioManager::isReceiving() const { return initialized_ && mode_ == RadioMode::RX; }
-float RadioManager::getRSSI() { return (!initialized_ || mode_ != RadioMode::RX) ? -127.0F : lastRssi_; }
-float RadioManager::getFrequency() const { return frequencyMHz_; }
+bool RadioManager::isInitialized() const { RadioGuard guard; return initialized_; }
+bool RadioManager::isReceiving() const { RadioGuard guard; return initialized_ && mode_ == RadioMode::RX; }
+float RadioManager::getRSSI() { RadioGuard guard; return (!initialized_ || mode_ != RadioMode::RX) ? -127.0F : lastRssi_; }
+float RadioManager::getFrequency() const { RadioGuard guard; return frequencyMHz_; }
 const char* RadioManager::getChipName() const { return "CC1101"; }
 const char* RadioManager::getModeName() const {
+  RadioGuard guard;
   switch (mode_) {
     case RadioMode::IDLE: return "IDLE";
     case RadioMode::RX: return "RX";
@@ -507,51 +573,57 @@ const char* RadioManager::getModeName() const {
     default: return "OFFLINE";
   }
 }
-int16_t RadioManager::getLastError() const { return lastError_; }
-RawFrameInfo RadioManager::getLastFrameInfo() const { return lastFrame; }
+int16_t RadioManager::getLastError() const { RadioGuard guard; return lastError_; }
+RawFrameInfo RadioManager::getLastFrameInfo() const { RadioGuard guard; return lastFrame; }
 uint16_t RadioManager::copyLastRaw(int16_t* destination, uint16_t capacity) const {
+  RadioGuard guard;
   if (!destination || capacity == 0 || !lastFrame.available) return 0;
   const uint16_t count = min(lastFrame.pulseCount, capacity);
-  noInterrupts(); for (uint16_t i = 0; i < count; i++) destination[i] = lastRaw[i]; interrupts();
+  for (uint16_t i = 0; i < count; i++) destination[i] = lastRaw[i];
   return count;
 }
-bool RadioManager::hasRawFrame() const { return lastFrame.available; }
+bool RadioManager::hasRawFrame() const { RadioGuard guard; return lastFrame.available; }
 
 bool RadioManager::startLearning() {
+  RadioGuard guard;
   if (!initialized_ || mode_ != RadioMode::RX) return false;
   learnCapture = LearnCaptureInfo{};
   learnCapture.state = LearnState::WAITING_FOR_SIGNAL;
   learnCapture.noiseFloorDbm = cc1101.getRSSI();
   diagnostics_.lastNoiseFloorDbm = learnCapture.noiseFloorDbm;
-  noInterrupts();
+  portENTER_CRITICAL(&rxMux);
   rxCount = 0; frameReady = false; lastEdgeUs = micros();
   lastLevel = digitalRead(OPENRF_CC1101_GDO0_PIN);
-  interrupts();
+  portEXIT_CRITICAL(&rxMux);
   Serial.print("LEARN started, noise floor: ");
   Serial.print(learnCapture.noiseFloorDbm, 1); Serial.println(" dBm");
   return true;
 }
 
 bool RadioManager::acceptLearnCapture() {
+  RadioGuard guard;
   if (learnCapture.state != LearnState::PREVIEW_READY || !learnCapture.available) return false;
   learnCapture.state = LearnState::ACCEPTED_RAM;
   Serial.println("LEARN capture accepted in RAM");
   return true;
 }
 bool RadioManager::discardLearnCapture() {
+  RadioGuard guard;
   if (learnCapture.state == LearnState::IDLE) return false;
   learnCapture = LearnCaptureInfo{};
   Serial.println("LEARN capture discarded");
   return true;
 }
-LearnCaptureInfo RadioManager::getLearnCaptureInfo() const { return learnCapture; }
+LearnCaptureInfo RadioManager::getLearnCaptureInfo() const { RadioGuard guard; return learnCapture; }
 uint16_t RadioManager::copyLearnRaw(int16_t* destination, uint16_t capacity) const {
+  RadioGuard guard;
   if (!destination || capacity == 0 || !learnCapture.available) return 0;
   const uint16_t count = min(learnCapture.pulseCount, capacity);
-  noInterrupts(); for (uint16_t i = 0; i < count; i++) destination[i] = learnRaw[i]; interrupts();
+  for (uint16_t i = 0; i < count; i++) destination[i] = learnRaw[i];
   return count;
 }
 const char* RadioManager::getLearnStateName() const {
+  RadioGuard guard;
   switch (learnCapture.state) {
     case LearnState::WAITING_FOR_SIGNAL: return "WAITING_FOR_SIGNAL";
     case LearnState::PREVIEW_READY: return "PREVIEW_READY";
@@ -559,4 +631,4 @@ const char* RadioManager::getLearnStateName() const {
     default: return "IDLE";
   }
 }
-RadioDiagnostics RadioManager::getDiagnostics() const { return diagnostics_; }
+RadioDiagnostics RadioManager::getDiagnostics() const { RadioGuard guard; return diagnostics_; }

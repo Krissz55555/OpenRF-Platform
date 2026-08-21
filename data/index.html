@@ -8,7 +8,16 @@
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <header class="topbar"><div class="topbar-content"><div class="brand"><img class="brand-logo" src="/logo.svg" alt="OpenRF Platform logo"><div><p class="eyebrow">OPEN SOURCE RF GATEWAY &amp; ANALYZER</p><h1>OpenRF Platform</h1></div></div><div class="topbar-status"><span id="uiVersion" class="version-chip">v1.2.0</span><span id="connectionBadge" class="badge badge-loading">Connecting</span></div></div></header>
+  <header class="topbar"><div class="topbar-content">
+    <div class="brand"><img class="brand-logo" src="/logo.svg" alt="OpenRF Platform logo"><div><p class="eyebrow">OPEN SOURCE RF GATEWAY &amp; ANALYZER</p><h1>OpenRF Platform</h1></div></div>
+    <div class="live-metrics" aria-label="Live system load">
+      <div class="metric-gauge metric-core0"><div><b>CORE 0</b><small>System</small></div><div id="core0Gauge" class="gauge" style="--p:0"><span id="core0Load">0%</span></div></div>
+      <div class="metric-gauge metric-core1"><div><b>CORE 1</b><small>Radio</small></div><div id="core1Gauge" class="gauge" style="--p:0"><span id="core1Load">0%</span></div></div>
+      <div class="metric-gauge metric-psram"><div><b>RAM</b><small>PSRAM</small></div><div id="psramGauge" class="gauge" style="--p:0"><span id="psramLoad">0%</span></div></div>
+      <div class="metric-gauge metric-heap"><div><b>HEAP</b><small>Used</small></div><div id="heapGauge" class="gauge" style="--p:0"><span id="heapLoad">0%</span></div></div>
+    </div>
+    <div class="topbar-status"><span id="uiVersion" class="version-chip">v1.2.0</span><span id="connectionBadge" class="badge badge-loading">Connecting</span></div>
+  </div></header>
   <main class="container">
     <nav class="tabs" aria-label="Main navigation">
       <button class="tab-button active" data-page="dashboard" type="button">Dashboard</button>
@@ -91,7 +100,24 @@
     <section id="page-rxslots" class="page">
       <div class="page-heading"><div><p class="eyebrow">RF TO HOME ASSISTANT</p><h2>RX Slots</h2></div><button id="refreshRxSlotsButton" class="button button-secondary" type="button">Refresh</button></div>
       <div class="card slot-summary"><strong id="rxSlotUsage">Loading RX slots...</strong><span id="rxSlotMessage" class="form-message"></span></div>
-      <p class="notice">Press Capture on an RX slot, then press the remote button once. The page completes automatically after saving. A matched signal publishes both a Home Assistant trigger and a visible binary sensor pulse. 700 ms lockout prevents repeated events from one button press.</p>
+
+      <article class="card rx-learn-filter-card">
+        <div class="analyzer-filter-heading">
+          <div>
+            <span class="label">RX Slot Learn filter</span>
+            <strong>Minimum signal strength</strong>
+          </div>
+          <span id="rxLearnRssiSaveState" class="form-message">Saved automatically</span>
+        </div>
+        <label class="analyzer-control">
+          <span>Minimum RSSI <strong id="rxLearnRssiValue">-75 dBm</strong></span>
+          <input id="rxLearnRssiThreshold" type="range" min="-100" max="-20" step="1" value="-75">
+        </label>
+        <div class="analyzer-slider-scale"><span>-100 dBm · sensitive</span><span>-20 dBm · nearby only</span></div>
+        <p class="learn-message">During RX Slot learning, the signal must reach this RSSI threshold <strong>and</strong> remain at least 6 dB above the measured noise floor. Weaker captures are ignored and learning continues automatically.</p>
+      </article>
+
+      <p class="notice">Press Capture on an RX slot, then press the remote button once. The page completes automatically after saving. A matched signal publishes both a Home Assistant trigger and a visible binary sensor pulse. The old generic 700 ms RX Slot lockout is disabled on ESP32-S3.</p>
       <div id="rxSlotGrid" class="slot-grid"></div>
     </section>
 
@@ -100,18 +126,23 @@
       <div class="page-heading">
         <div><p class="eyebrow">LIVE RF DIAGNOSTICS</p><h2>RF Analyzer</h2></div>
         <div class="button-row analyzer-heading-actions">
-          <label class="toggle developer-toggle developer-toggle-compact"><input id="analyzerDeveloperMode" type="checkbox"><span>Developer Mode (Exclusive Analyzer)</span><b id="developerModeState">OFF</b></label>
+          <label class="analyzer-power-control" title="Enable or disable RF Analyzer">
+            <span class="analyzer-power-title">RF Analyzer</span>
+            <span class="analyzer-segmented-switch">
+              <input id="analyzerDeveloperMode" type="checkbox" aria-label="RF Analyzer power">
+              <span class="analyzer-segment analyzer-segment-off">◉ OFF</span>
+              <span class="analyzer-segment analyzer-segment-on">⌁ ON</span>
+            </span>
+            <b id="developerModeState" class="sr-only">OFF</b>
+          </label>
           <button id="copyAnalyzerButton" class="button button-secondary" type="button">Copy report</button>
           <button id="refreshAnalyzerButton" class="button button-secondary" type="button">Refresh</button>
         </div>
       </div>
-      <div id="developerExclusiveWarning" class="developer-exclusive-warning" hidden>
-        <strong>⚠ ESP8266 Exclusive Analyzer Mode active</strong>
-        <span>The full RF Analyzer has exclusive system priority. RX Slot processing, MQTT RF events, Home Assistant Discovery, RF event forwarding and non-essential gateway services are temporarily inactive. Disable Developer Mode to restore normal gateway operation. This ESP8266-only restriction will not apply to OpenRF Platform ESP32 v2.</span>
-      </div>
+      <div id="developerExclusiveWarning" class="developer-exclusive-warning" hidden></div>
       <article class="card learn-card">
         <div class="learn-status-row"><div><span class="label">Latest RF event</span><strong id="analyzerSequence">Waiting for signal</strong></div><span id="analyzerBadge" class="badge badge-loading">Idle</span></div>
-        <p class="learn-message"><strong>RF Analyzer disabled in Gateway Mode.</strong> On ESP8266, the full Analyzer is disabled during normal gateway operation to maximize stability and available memory. Enable <strong>Developer Mode (Exclusive Analyzer)</strong> to use the complete RF Analyzer.</p>
+        <p id="analyzerModeMessage" class="learn-message analyzer-mode-message"><strong>RF Analyzer is disabled.</strong> The gateway remains fully operational. Enable RF Analyzer for live RF diagnostics; on ESP32-S3 it runs in non-exclusive mode alongside RX Slots, MQTT and Home Assistant.</p>
       </article>
 
       <article class="card analyzer-filter-card developer-only" hidden>
@@ -137,7 +168,7 @@
           <div><span class="label">Peak RSSI</span><strong id="analyzerPeakRssi">-</strong></div>
           <div><span class="label">Filtered as weak</span><strong id="analyzerWeakRssi">0</strong></div>
         </div>
-        <p class="learn-message analyzer-filter-note">ESP8266 operating modes: Gateway Mode runs RX Slots, MQTT, Home Assistant and normal RF services with the Analyzer disabled. Developer Mode runs the full Analyzer at maximum speed while all other gateway functions are temporarily inactive. OpenRF Platform ESP32 v2 will support Analyzer and gateway operation simultaneously without this restriction.</p>
+        <p class="learn-message analyzer-filter-note">ESP32-S3 non-exclusive Analyzer: full RF diagnostics can run while RX Slots, MQTT, Home Assistant and normal gateway services remain active.</p>
       </article>
 
       <article class="card last-candidate-card developer-only" hidden>
@@ -185,7 +216,23 @@
     </section>
 
     <section id="page-system" class="page">
-      <div class="page-heading"><div><p class="eyebrow">MAINTENANCE</p><h2>System</h2></div></div>
+      <div class="page-heading"><div><p class="eyebrow">MAINTENANCE</p><h2>System</h2>
+      <article class="card memory-diagnostics-card">
+        <div class="analyzer-filter-heading">
+          <div><span class="label">ESP32-S3 memory</span><strong>N16R8 hardware diagnostics</strong></div>
+          <span id="memoryDiagState" class="form-message">Loading...</span>
+        </div>
+        <div class="memory-diagnostics-grid">
+          <div><span>Flash total</span><strong id="memoryFlashTotal">—</strong></div>
+          <div><span>PSRAM total</span><strong id="memoryPsramTotal">—</strong></div>
+          <div><span>PSRAM free</span><strong id="memoryPsramFree">—</strong></div>
+          <div><span>Internal heap total</span><strong id="memoryHeapTotal">—</strong></div>
+          <div><span>Internal heap free</span><strong id="memoryHeapFree">—</strong></div>
+          <div><span>OpenRF PSRAM buffers</span><strong id="memoryOpenrfPsram">—</strong></div>
+          <div><span>Analyzer PSRAM stores</span><strong id="memoryAnalyzerPsram">—</strong></div>
+        </div>
+      </article>
+</div></div>
       <div class="system-grid">
         <article class="card system-card">
           <h3>Firmware update</h3>
@@ -216,15 +263,25 @@
 
     <section id="page-about" class="page">
       <div class="page-heading"><div><p class="eyebrow">PROJECT INFORMATION</p><h2>About</h2></div></div>
-      <article class="card about-card">
-        <div class="about-brand"><img class="about-logo" src="/logo.svg" alt="OpenRF Platform logo"><div><p class="eyebrow">OPEN SOURCE RF GATEWAY &amp; ANALYZER</p><h2>OpenRF Platform</h2></div></div>
-        <p>A compact RF gateway and analyzer for ESP8266 and CC1101 with precise RAW Learn/Replay, protocol-aware RX events, WebUI, REST API, MQTT, Home Assistant Discovery, OTA and backup/restore.</p>
-        <p class="legacy-note">Built for ESP8266 on purpose: to give the slightly dated but still capable boards sitting in drawers a useful second life.</p>
-        <div class="about-grid">
-          <div><span class="label">Created by</span><strong>Kocsis Krisztián</strong></div>
-          <div><span class="label">Architecture &amp; development support</span><strong>ChatGPT (OpenAI)</strong></div>
-          <div><span class="label">License</span><strong>MIT</strong></div>
-          <div><span class="label">UI status</span><strong>Stable v1.2.0</strong></div>
+      <article class="card about-card about-card-modern">
+        <div class="about-main">
+          <div class="about-brand">
+            <img class="about-logo" src="/logo.svg" alt="OpenRF Platform logo">
+            <div>
+              <p class="eyebrow">OPEN SOURCE RF GATEWAY &amp; ANALYZER</p>
+              <h2>OpenRF Platform</h2>
+            </div>
+          </div>
+          <p>A compact and powerful RF gateway and analyzer for <strong>ESP32-S3</strong> and CC1101. It provides precise RAW Learn/Replay, protocol-aware RX events, RF Analyzer, WebUI, REST API, MQTT, Home Assistant Discovery, OTA updates and configuration backup/restore.</p>
+          <p class="platform-note"><strong>ESP32-S3 port:</strong> the complete v1.2.0 feature set with dual-core operation, PSRAM-aware memory handling and non-exclusive RF Analyzer. The second CC1101 and LoRa remain outside this port.</p>
+        </div>
+        <div class="about-grid about-grid-modern">
+          <div><span class="about-icon">●</span><span><span class="label">Created by</span><strong>Kocsis Krisztián</strong></span></div>
+          <div><span class="about-icon">▣</span><span><span class="label">Platform</span><strong>ESP32-S3 N16R8</strong><small>16 MB Flash · 8 MB PSRAM</small></span></div>
+          <div><span class="about-icon">⌁</span><span><span class="label">RF frontend</span><strong>CC1101</strong><small>Current port: 1 active radio</small></span></div>
+          <div><span class="about-icon">&lt;/&gt;</span><span><span class="label">Firmware</span><strong>v1.2.0 – ESP32-S3</strong><small>Stable port</small></span></div>
+          <div><span class="about-icon">◌</span><span><span class="label">Architecture &amp; development support</span><strong>ChatGPT (OpenAI)</strong></span></div>
+          <div><span class="about-icon">◇</span><span><span class="label">License</span><strong>MIT</strong></span></div>
         </div>
       </article>
     </section>

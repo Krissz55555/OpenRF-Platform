@@ -19,6 +19,7 @@ void configResetDefaults() {
   config.homeAssistantDiscovery = true;
   config.replayCount = 1;
   config.radioFrequencyMhz = 433;
+  config.rxSlotLearnMinRssi = -75;
   config.analyzerMinRssi = -75;
   config.analyzerMinPulseCount = 20;
   config.analyzerMinDurationUs = 5000;
@@ -67,6 +68,7 @@ bool configLoad() {
   config.homeAssistantDiscovery = doc["home_assistant_discovery"] | true;
   config.replayCount = doc["replay_count"] | 1;
   config.radioFrequencyMhz = doc["radio_frequency_mhz"] | 433;
+  config.rxSlotLearnMinRssi = doc["rxslot_learn_min_rssi"] | -75;
   config.analyzerMinRssi = doc["analyzer_min_rssi"] | -75;
   config.analyzerMinPulseCount = doc["analyzer_min_pulse_count"] | 20;
   config.analyzerMinDurationUs = doc["analyzer_min_duration_us"] | 5000;
@@ -101,6 +103,9 @@ bool configLoad() {
   if (config.radioFrequencyMhz != 433 && config.radioFrequencyMhz != 868) {
     config.radioFrequencyMhz = 433;
   }
+  if (config.rxSlotLearnMinRssi < -100 || config.rxSlotLearnMinRssi > -20) {
+    config.rxSlotLearnMinRssi = -75;
+  }
 
   if (config.analyzerMinRssi < -100 || config.analyzerMinRssi > -20) config.analyzerMinRssi = -75;
   if (config.analyzerMinPulseCount < 2 || config.analyzerMinPulseCount > 300) config.analyzerMinPulseCount = 20;
@@ -126,6 +131,7 @@ bool configSave() {
   doc["home_assistant_discovery"] = config.homeAssistantDiscovery;
   doc["replay_count"] = config.replayCount;
   doc["radio_frequency_mhz"] = config.radioFrequencyMhz;
+  doc["rxslot_learn_min_rssi"] = config.rxSlotLearnMinRssi;
   doc["analyzer_min_rssi"] = config.analyzerMinRssi;
   doc["analyzer_min_pulse_count"] = config.analyzerMinPulseCount;
   doc["analyzer_min_duration_us"] = config.analyzerMinDurationUs;
@@ -161,6 +167,7 @@ String configToJson() {
   doc["home_assistant_discovery"] = config.homeAssistantDiscovery;
   doc["replay_count"] = config.replayCount;
   doc["radio_frequency_mhz"] = config.radioFrequencyMhz;
+  doc["rxslot_learn_min_rssi"] = config.rxSlotLearnMinRssi;
   doc["analyzer_min_rssi"] = config.analyzerMinRssi;
   doc["analyzer_min_pulse_count"] = config.analyzerMinPulseCount;
   doc["analyzer_min_duration_us"] = config.analyzerMinDurationUs;

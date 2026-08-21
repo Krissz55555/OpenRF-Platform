@@ -6,7 +6,7 @@
 
 <h1 align="center">OpenRF Platform</h1>
 
-<p align="center"><strong>Open-source RF gateway and protocol-development platform for ESP8266 + CC1101.</strong></p>
+<p align="center"><strong>Open-source RF gateway and protocol-development platform for ESP32-S3 + CC1101.</strong></p>
 
 <p align="center">RF Gateway • RF Analyzer • Kinetic RF • MQTT • Home Assistant • REST API • OTA • 433 / 868 MHz</p>
 
@@ -14,7 +14,7 @@
 
 ## Key technologies
 
-- ESP8266 (NodeMCU V2)
+- ESP32-S3 N16R8
 - CC1101 RF transceiver
 - RadioLib
 - PlatformIO
@@ -28,9 +28,11 @@
 
 ## Current release
 
-**OpenRF Platform v1.2.0 Final**
+**OpenRF Platform v1.2.0 – ESP32-S3 Port**
 
-Version 1.2.0 is the **final feature release for ESP8266**. The ESP8266 edition is now feature-complete and will receive only critical stability or security fixes when required. All future feature development continues on **OpenRF Platform ESP32 v2**.
+This branch ports the complete **v1.2.0 Final ESP8266 feature set** to ESP32-S3 N16R8. The port preserves the existing platform behaviour while replacing ESP8266-specific limitations with dual-core and PSRAM-aware operation.
+
+The second CC1101, simultaneous 433/868 MHz operation and LoRa are intentionally outside the scope of this port. See `ESP32_S3_PORT.md` for the seven porting milestones and the exact port boundary.
 
 OpenRF Platform began as a practical 433 MHz remote-control project and evolved into a modular RF platform with protocol-aware reception, RAW learning and replay, MQTT, native Home Assistant integration, a browser-based RF Analyzer, Kinetic RF support, OTA updates and persistent configuration.
 

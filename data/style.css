@@ -522,3 +522,337 @@ h3 {
 @media(max-width:760px){.analyzer-heading-actions{width:100%;justify-content:flex-start}.developer-toggle-compact{order:-1}}
 
 .developer-exclusive-warning{margin:0 0 16px;padding:14px 16px;border:1px solid rgba(255,72,72,.7);border-radius:12px;background:rgba(180,20,20,.18);color:#ff8b8b;display:flex;flex-direction:column;gap:5px;line-height:1.45}.developer-exclusive-warning strong{color:#ff5f5f;font-size:15px}.developer-exclusive-warning[hidden]{display:none}
+
+
+/* ESP32-S3 dual-core live header diagnostics */
+.topbar-content { gap: 24px; }
+.live-metrics {
+  display:flex; align-items:center; justify-content:center; gap:18px;
+  flex:1 1 auto; min-width:0;
+}
+.metric-gauge { display:flex; align-items:center; gap:9px; white-space:nowrap; }
+.metric-gauge > div:first-child { display:flex; flex-direction:column; gap:3px; }
+.metric-gauge b { font-size:12px; letter-spacing:.04em; }
+.metric-gauge small { font-size:12px; color:var(--muted); }
+.metric-core0 b { color:#2d8cff; }
+.metric-core1 b { color:#69d32f; }
+.metric-psram b { color:#9c62e8; }
+.metric-heap b { color:#f3c623; }
+
+.gauge {
+  --p:0; --gauge-color:#2d8cff;
+  width:48px; height:48px; border-radius:50%;
+  display:grid; place-items:center; flex:0 0 auto;
+  background:conic-gradient(var(--gauge-color) calc(var(--p) * 1%), #27313d 0);
+  position:relative;
+}
+.gauge::before {
+  content:""; position:absolute; inset:5px; border-radius:50%;
+  background:#0d131a;
+}
+.gauge span { position:relative; z-index:1; font-size:12px; font-weight:800; color:#fff; }
+.metric-core0 .gauge { --gauge-color:#2d8cff; }
+.metric-core1 .gauge { --gauge-color:#69d32f; }
+.metric-psram .gauge { --gauge-color:#9c62e8; }
+.metric-heap .gauge { --gauge-color:#f3c623; }
+
+@media (max-width: 1150px) {
+  .metric-gauge > div:first-child { display:none; }
+  .live-metrics { gap:10px; }
+}
+@media (max-width: 820px) {
+  .live-metrics { display:none; }
+}
+
+.rx-learn-filter-card{margin-bottom:16px}
+.rx-learn-filter-card .analyzer-control{margin-top:16px}
+
+.memory-diagnostics-card{margin-bottom:18px}
+.memory-diagnostics-grid{display:grid;grid-template-columns:repeat(5,minmax(120px,1fr));gap:12px;margin-top:16px}
+.memory-diagnostics-grid>div{padding:14px;border:1px solid var(--border);border-radius:12px;background:rgba(255,255,255,.025);display:flex;flex-direction:column;gap:6px}
+.memory-diagnostics-grid span{font-size:12px;color:var(--muted)}
+.memory-diagnostics-grid strong{font-size:18px}
+@media(max-width:950px){.memory-diagnostics-grid{grid-template-columns:repeat(2,minmax(120px,1fr))}}
+
+
+/* ESP32-S3 v1.2.0 visual polish ------------------------------------------------ */
+.sr-only{
+  position:absolute!important;width:1px!important;height:1px!important;padding:0!important;
+  margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;
+  white-space:nowrap!important;border:0!important
+}
+
+/* Symmetric live diagnostics header */
+.topbar-content{
+  width:min(100% - 32px,1160px);
+  display:grid;
+  grid-template-columns:minmax(260px,1.05fr) minmax(520px,1.8fr) auto;
+  align-items:center;
+  gap:24px;
+}
+.brand h1{font-size:clamp(28px,3.2vw,40px)}
+.live-metrics{
+  display:grid;
+  grid-template-columns:repeat(4,minmax(112px,1fr));
+  width:100%;
+  gap:0;
+  align-items:center;
+}
+.metric-gauge{
+  min-width:0;
+  justify-content:center;
+  gap:10px;
+  padding:0 15px;
+  border-left:1px solid var(--border);
+}
+.metric-gauge:last-child{border-right:1px solid var(--border)}
+.metric-gauge > div:first-child{
+  min-width:55px;
+  align-items:flex-start;
+}
+.gauge{width:50px;height:50px}
+.topbar-status{justify-content:flex-end}
+
+@media(max-width:1050px){
+  .topbar-content{grid-template-columns:minmax(230px,.9fr) minmax(420px,1.6fr) auto;gap:16px}
+  .metric-gauge{padding:0 9px}
+  .metric-gauge > div:first-child{display:flex}
+}
+@media(max-width:900px){
+  .topbar-content{display:flex}
+  .metric-gauge > div:first-child{display:none}
+  .metric-gauge{min-width:58px;padding:0 8px}
+}
+@media(max-width:820px){
+  .topbar-content{width:min(100% - 24px,920px)}
+  .live-metrics{display:none}
+}
+
+/* Clear RF Analyzer ON/OFF control */
+.analyzer-heading-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.analyzer-power-control{
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+  min-width:250px;
+  padding:10px 12px;
+  border:1px solid var(--border);
+  border-radius:12px;
+  background:#0f141a;
+}
+.analyzer-power-title{
+  color:var(--text);
+  font-size:13px;
+  font-weight:800;
+}
+.analyzer-segmented-switch{
+  position:relative;
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  min-height:38px;
+  overflow:hidden;
+  border:1px solid #26313d;
+  border-radius:9px;
+  background:#111820;
+}
+.analyzer-segmented-switch input{
+  position:absolute;
+  width:1px;height:1px;
+  opacity:0;
+  pointer-events:none;
+}
+.analyzer-segment{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:6px;
+  color:#8995a4;
+  font-size:13px;
+  font-weight:800;
+  transition:background .18s ease,color .18s ease,box-shadow .18s ease;
+  cursor:pointer;
+}
+.analyzer-segment-off{background:#17202a}
+.analyzer-segmented-switch input:not(:checked) ~ .analyzer-segment-off{
+  color:#fff;
+  background:#343d48;
+  box-shadow:inset 0 0 0 1px #556170;
+}
+.analyzer-segmented-switch input:checked ~ .analyzer-segment-off{
+  background:#141b23;color:#697482;
+}
+.analyzer-segmented-switch input:checked ~ .analyzer-segment-on{
+  color:#eaffef;
+  background:rgba(27,170,68,.38);
+  box-shadow:inset 0 0 0 1px #25c35a,0 0 14px rgba(37,195,90,.12);
+}
+.analyzer-mode-message{line-height:1.5}
+@media(max-width:760px){
+  .analyzer-heading-actions{width:100%;align-items:stretch}
+  .analyzer-power-control{width:100%;min-width:0}
+}
+
+/* Updated ESP32-S3 About page */
+.about-card-modern{
+  display:grid;
+  grid-template-columns:minmax(0,1.35fr) minmax(360px,1fr);
+  gap:24px;
+  padding:26px;
+}
+.about-main{min-width:0}
+.about-main > p{
+  color:var(--muted);
+  line-height:1.58;
+}
+.about-main strong{color:var(--text)}
+.platform-note{
+  margin:18px 0 0;
+  padding:14px 16px;
+  border:1px solid rgba(39,194,129,.38);
+  border-left:3px solid var(--success);
+  border-radius:10px;
+  background:rgba(39,194,129,.055);
+}
+.about-grid-modern{
+  grid-template-columns:1fr;
+  gap:10px;
+  margin-top:0;
+}
+.about-grid-modern > div{
+  display:flex;
+  align-items:center;
+  gap:13px;
+  min-height:76px;
+  padding:14px 16px;
+}
+.about-grid-modern > div > span:last-child{
+  min-width:0;
+  display:flex;
+  flex-direction:column;
+}
+.about-grid-modern .label{margin-bottom:4px}
+.about-grid-modern small{
+  display:block;
+  margin-top:4px;
+  color:var(--muted);
+  font-size:12px;
+}
+.about-icon{
+  width:34px;
+  flex:0 0 34px;
+  text-align:center;
+  color:var(--accent);
+  font-size:22px;
+  font-weight:800;
+}
+.about-grid-modern > div:nth-child(2) .about-icon{color:#9c62e8}
+.about-grid-modern > div:nth-child(3) .about-icon{color:#27c281}
+.about-grid-modern > div:nth-child(4) .about-icon{color:#f3c623}
+.about-grid-modern > div:nth-child(5) .about-icon{color:#8c82ff}
+.about-grid-modern > div:nth-child(6) .about-icon{color:#f2a23a}
+@media(max-width:880px){
+  .about-card-modern{grid-template-columns:1fr}
+  .about-grid-modern{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media(max-width:620px){
+  .about-grid-modern{grid-template-columns:1fr}
+}
+
+
+/* Mobile header diagnostics fix ------------------------------------------------
+   Desktop layout is intentionally unchanged. */
+@media(max-width:820px){
+  .topbar-content{
+    width:min(100% - 24px,920px);
+    display:grid;
+    grid-template-columns:1fr auto;
+    gap:14px 10px;
+    align-items:center;
+  }
+
+  .brand{
+    min-width:0;
+  }
+
+  .live-metrics{
+    grid-column:1 / -1;
+    display:grid;
+    grid-template-columns:repeat(4,minmax(0,1fr));
+    width:100%;
+    gap:6px;
+    order:3;
+  }
+
+  .metric-gauge{
+    min-width:0;
+    padding:6px 2px;
+    border-left:0;
+    border-right:0!important;
+    flex-direction:column;
+    gap:4px;
+    justify-content:center;
+  }
+
+  .metric-gauge > div:first-child{
+    display:flex;
+    min-width:0;
+    align-items:center;
+    text-align:center;
+  }
+
+  .metric-gauge .metric-label{
+    font-size:10px;
+    line-height:1.1;
+  }
+
+  .metric-gauge .metric-sub{
+    font-size:9px;
+    line-height:1.1;
+  }
+
+  .gauge{
+    width:44px;
+    height:44px;
+  }
+
+  .gauge::after{
+    inset:5px;
+  }
+
+  .gauge strong{
+    font-size:11px;
+  }
+
+  .topbar-status{
+    align-self:start;
+    justify-content:flex-end;
+  }
+}
+
+@media(max-width:480px){
+  .topbar-content{
+    width:min(100% - 16px,920px);
+  }
+
+  .live-metrics{
+    gap:2px;
+  }
+
+  .metric-gauge{
+    padding-left:0;
+    padding-right:0;
+  }
+
+  .gauge{
+    width:40px;
+    height:40px;
+  }
+
+  .metric-gauge .metric-label{
+    font-size:9px;
+  }
+
+  .metric-gauge .metric-sub{
+    font-size:8px;
+  }
+}

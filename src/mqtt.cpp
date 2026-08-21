@@ -1,6 +1,7 @@
 #include <Arduino.h>
+#include "dualcore.h"
 #include <ArduinoJson.h>
-#include <ESP8266WiFi.h>
+#include <WiFi.h>
 #include <PubSubClient.h>
 
 #include "config.h"
@@ -10,13 +11,13 @@
 #include "storage.h"
 #include "scratch.h"
 #include "version.h"
-#include "wifi.h"
+#include "openrf_wifi.h"
+#include "platform_compat.h"
 
 namespace {
 WiFiClient networkClient;
 PubSubClient client(networkClient);
 uint32_t lastConnectAttemptMs = 0;
-uint32_t lastPublishedSequence = 0;
 String baseTopic;
 String clientId;
 bool discoveryPending = false;
@@ -27,9 +28,6 @@ uint32_t discoveryNextStepMs = 0;
 constexpr uint32_t DISCOVERY_START_DELAY_MS = 15000;
 constexpr uint32_t DISCOVERY_RESCAN_DELAY_MS = 5000;
 constexpr uint32_t DISCOVERY_STEP_DELAY_MS = 150;
-constexpr uint32_t DISCOVERY_RETRY_DELAY_MS = 500;
-constexpr uint32_t DISCOVERY_MIN_FREE_HEAP = 12000;
-constexpr uint32_t DISCOVERY_MIN_MAX_BLOCK = 3000;
 
 uint8_t pendingLearnSlot = 0;
 String pendingLearnName;
@@ -55,7 +53,7 @@ uint8_t findFirstEmptySlot() {
 
 bool beginMqttLearn(uint8_t slot, const String& name) {
   if (slot < 1 || slot > OPENRF_SLOT_COUNT || pendingLearnActive) return false;
-  if (!Radio.startLearning()) return false;
+  if (!rfCommandStartLearn()) return false;
   pendingLearnSlot = slot;
   pendingLearnName = name.length() ? name : ("RF Slot " + String(slot));
   pendingLearnActive = true;
@@ -79,7 +77,7 @@ String sanitizeTopicPart(String value) {
 }
 
 String deviceIdentifier() {
-  return "openrf_" + String(ESP.getChipId(), HEX);
+  return "openrf_" + openrfChipIdHex();
 }
 
 void addDevice(JsonDocument& doc) {
@@ -88,7 +86,7 @@ void addDevice(JsonDocument& doc) {
   identifiers.add(deviceIdentifier());
   device["name"] = config.hostname;
   device["manufacturer"] = "OpenRF";
-  device["model"] = "ESP8266 CC1101 RF Platform";
+  device["model"] = "ESP32-S3 CC1101 RF Platform";
   device["sw_version"] = FW_VERSION;
   device["configuration_url"] = "http://" + WiFi.localIP().toString() + "/";
 }
@@ -105,7 +103,7 @@ bool publishDiscoveryDocument(const String& topic, JsonDocument& doc) {
 bool sendSlot(uint8_t slot) {
   SlotInfo info;
   if (!storageLoadSlot(slot, openrfScratch, OPENRF_MAX_RAW_PULSES, info)) return false;
-  return Radio.sendRaw(openrfScratch, info.pulseCount, config.replayCount);
+  return rfCommandSendRaw(openrfScratch, info.pulseCount, config.replayCount);
 }
 
 void callback(char* topic, byte* payload, unsigned int length) {
@@ -201,56 +199,63 @@ void connectIfNeeded() {
   Serial.println(baseTopic);
 }
 
-void publishRxIfNew() {
-  if (!client.connected()) return;
-  const RawFrameInfo info = Radio.getLastFrameInfo();
-  if (!info.available || info.sequence == lastPublishedSequence) return;
-  lastPublishedSequence = info.sequence;
+void mqttHandleRFEventImpl(const RFEventMessage& event) {
+  if (event.type == RFEventType::RX_FRAME) {
+    if (!config.mqttEnabled || !client.connected()) return;
 
-  JsonDocument doc;
-  doc["sequence"] = info.sequence;
-  doc["pulse_count"] = info.pulseCount;
-  doc["duration_us"] = info.durationUs;
-  doc["rssi_dbm"] = info.rssiDbm;
-  doc["frequency_mhz"] = Radio.getFrequency();
-  String payload;
-  serializeJson(doc, payload);
-  const String topic = baseTopic + "/rx";
-  client.publish(topic.c_str(), payload.c_str(), false);
-}
+    JsonDocument doc;
+    doc["sequence"] = event.sequence;
+    doc["pulse_count"] = event.pulseCount;
+    doc["duration_us"] = event.durationUs;
+    doc["rssi_dbm"] = event.rssiDbm;
+    doc["frequency_mhz"] = event.frequencyMhz;
 
+    String payload;
+    serializeJson(doc, payload);
+    const String topic = baseTopic + "/rx";
+    client.publish(topic.c_str(), payload.c_str(), false);
+    return;
+  }
 
-void processPendingLearn() {
-  if (!pendingLearnActive) return;
-  const LearnCaptureInfo capture = Radio.getLearnCaptureInfo();
-  if (capture.state != LearnState::PREVIEW_READY || !capture.available) return;
+  if (event.type == RFEventType::LEARN_PREVIEW) {
+    if (!pendingLearnActive || event.pulseCount == 0) return;
 
-  const uint16_t count = Radio.copyLearnRaw(openrfScratch, OPENRF_MAX_RAW_PULSES);
-  uint32_t fingerprint = 0;
-  const bool ok = count > 0 && storageSaveSlot(
-      pendingLearnSlot, pendingLearnName, Radio.getFrequency(), openrfScratch,
-      count, capture.durationUs, &fingerprint);
+    uint32_t fingerprint = 0;
+    const bool ok = storageSaveSlot(
+        pendingLearnSlot, pendingLearnName, event.frequencyMhz,
+        event.pulses, event.pulseCount, event.durationUs, &fingerprint);
 
-  const uint8_t completedSlot = pendingLearnSlot;
-  pendingLearnActive = false;
-  pendingLearnSlot = 0;
-  pendingLearnName = "";
-  Radio.discardLearnCapture();
+    const uint8_t completedSlot = pendingLearnSlot;
+    pendingLearnActive = false;
+    pendingLearnSlot = 0;
+    pendingLearnName = "";
+    rfCommandDiscardLearn();
 
-  const String stateTopic = baseTopic + "/slot/" + String(completedSlot) + "/state";
-  client.publish(stateTopic.c_str(), ok ? "learned" : "learn_error", true);
-  publishLearnState(ok ? "saved" : "save_error", completedSlot);
+    if (client.connected()) {
+      const String stateTopic =
+          baseTopic + "/slot/" + String(completedSlot) + "/state";
+      client.publish(stateTopic.c_str(),
+                     ok ? "learned" : "learn_error", true);
+      publishLearnState(ok ? "saved" : "save_error", completedSlot);
+    }
 
-  if (ok) {
-    mqttPublishStatus();
-    if (config.homeAssistantDiscovery) mqttPublishDiscovery();
-    Serial.print("MQTT learn saved slot ");
-    Serial.print(completedSlot);
-    Serial.print(", fingerprint ");
-    Serial.println(fingerprint, HEX);
-  } else {
-    Serial.print("MQTT learn save failed for slot ");
-    Serial.println(completedSlot);
+    if (ok) {
+      mqttPublishStatus();
+      if (config.homeAssistantDiscovery) mqttPublishDiscovery();
+      Serial.print("MQTT learn saved slot ");
+      Serial.print(completedSlot);
+      Serial.print(", fingerprint ");
+      Serial.println(fingerprint, HEX);
+    } else {
+      Serial.print("MQTT learn save failed for slot ");
+      Serial.println(completedSlot);
+    }
+    return;
+  }
+
+  if (event.type == RFEventType::RADIO_ERROR) {
+    Serial.print(F("Radio event error, code: "));
+    Serial.println(event.errorCode);
   }
 }
 
@@ -260,14 +265,8 @@ void processDiscovery() {
   const uint32_t now = millis();
   if (static_cast<int32_t>(now - discoveryNextStepMs) < 0) return;
 
-  // Home Assistant discovery produces many temporary String/JSON allocations.
-  // On ESP8266, run only one small discovery item per loop iteration and wait
-  // until both total heap and the largest contiguous block are healthy.
-  if (ESP.getFreeHeap() < DISCOVERY_MIN_FREE_HEAP ||
-      ESP.getMaxFreeBlockSize() < DISCOVERY_MIN_MAX_BLOCK) {
-    discoveryNextStepMs = now + DISCOVERY_RETRY_DELAY_MS;
-    return;
-  }
+  // ESP32-S3: Discovery is still paced to avoid flooding MQTT, but it is no
+  // longer suspended based on ESP8266 heap / contiguous-block thresholds.
 
   const String id = deviceIdentifier();
   const String availability = baseTopic + "/availability";
@@ -428,6 +427,11 @@ void processDiscovery() {
 
 }  // namespace
 
+void mqttHandleRFEvent(const RFEventMessage& event) {
+  mqttHandleRFEventImpl(event);
+}
+
+
 void mqttPublishRxSlotEvent(uint8_t slot, const RxSlotInfo& info) {
   if (!client.connected()) return;
   JsonDocument doc;
@@ -451,7 +455,7 @@ void mqttPublishRxSlotEvent(uint8_t slot, const RxSlotInfo& info) {
 
 void mqttBegin() {
   baseTopic = "openrf/" + sanitizeTopicPart(config.hostname);
-  clientId = sanitizeTopicPart(config.hostname) + "-" + String(ESP.getChipId(), HEX);
+  clientId = sanitizeTopicPart(config.hostname) + "-" + openrfChipIdHex();
   client.setServer(config.mqttHost.c_str(), config.mqttPort);
   client.setCallback(callback);
   client.setBufferSize(1024);
@@ -472,8 +476,6 @@ void mqttLoop() {
   connectIfNeeded();
   if (!client.connected()) return;
   client.loop();
-  processPendingLearn();
-  publishRxIfNew();
   processDiscovery();
 }
 
