@@ -200,13 +200,10 @@ The current ISR RF capture limit intentionally remains **600 pulses**. Larger no
 ## Supported hardware
 
 | Hardware | Status |
-| --- | --- |
-| ESP32-S3 N16R8 | Supported – current reference platform |
-| CC1101 433 MHz module | Supported |
-| CC1101 868 MHz module | Supported |
-| ESP8266 NodeMCU V2 | Legacy stable platform – see `esp8266` branch |
-| SX1276 / LoRa | Planned, not active in this release |
-| Second CC1101 | Planned, not active in this release |
+|---|---|
+| ESP32-S3 N16R8 | ✅ Supported |
+| CC1101 | ✅ Supported |
+| ESP8266 | Legacy — v1.2.0 |
 
 ### Current RF hardware scope
 
