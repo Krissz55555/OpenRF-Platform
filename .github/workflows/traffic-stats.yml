@@ -35,10 +35,11 @@ jobs:
             "https://api.github.com/repos/$REPO/traffic/views" \
             > stats/views-latest.json
 
-      - name: Save traffic history
+      - name: Save traffic history and update README
         run: |
-          python3 - <<'PY'
+          python3 <<'PY'
           import json
+          import re
           from pathlib import Path
 
           stats = Path("stats")
@@ -62,38 +63,37 @@ jobs:
                   json.dumps(history, indent=2, sort_keys=True) + "\n"
               )
 
-          merge("clones-latest.json", "clones-history.json", "clones")
-          merge("views-latest.json", "views-history.json", "views")
-          PY
+              return history
 
-      - name: Update README statistics
-        run: |
-          python3 - <<'PY'
-          import json
-          import re
-          from pathlib import Path
+          clones = merge(
+              "clones-latest.json",
+              "clones-history.json",
+              "clones"
+          )
 
-          clones = json.loads(Path("stats/clones-history.json").read_text())
-          views = json.loads(Path("stats/views-history.json").read_text())
+          views = merge(
+              "views-latest.json",
+              "views-history.json",
+              "views"
+          )
 
           total_clones = sum(item["count"] for item in clones.values())
           total_views = sum(item["count"] for item in views.values())
 
-          tracking_since = min(
-              list(clones.keys()) + list(views.keys())
-          )[:10]
+          all_dates = list(clones.keys()) + list(views.keys())
+          tracking_since = min(all_dates)[:10] if all_dates else "-"
 
           readme_path = Path("README.md")
           readme = readme_path.read_text()
 
-          block = f"""<!-- OPENRF_STATS_START -->
-## OpenRF Platform Statistics
-
-- Repository views: **{total_views}**
-- Repository clones: **{total_clones}**
-- Tracking since: **{tracking_since}**
-
-<!-- OPENRF_STATS_END -->"""
+          block = (
+              "<!-- OPENRF_STATS_START -->\n"
+              "## OpenRF Platform Statistics\n\n"
+              f"- Repository views: **{total_views}**\n"
+              f"- Repository clones: **{total_clones}**\n"
+              f"- Tracking since: **{tracking_since}**\n\n"
+              "<!-- OPENRF_STATS_END -->"
+          )
 
           pattern = re.compile(
               r"<!-- OPENRF_STATS_START -->.*?<!-- OPENRF_STATS_END -->",
