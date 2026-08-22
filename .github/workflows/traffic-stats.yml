@@ -1,0 +1,124 @@
+name: OpenRF Traffic Stats
+
+on:
+  schedule:
+    - cron: "15 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Collect GitHub traffic statistics
+        env:
+          GH_TOKEN: ${{ secrets.TRAFFIC_STATS_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          mkdir -p stats
+
+          curl -sS \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPO/traffic/clones" \
+            > stats/clones-latest.json
+
+          curl -sS \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPO/traffic/views" \
+            > stats/views-latest.json
+
+      - name: Save traffic history and update README
+        run: |
+          python3 <<'PY'
+          import json
+          import re
+          from pathlib import Path
+
+          stats = Path("stats")
+
+          def merge(latest_file, history_file, key):
+              latest = json.loads((stats / latest_file).read_text())
+              history_path = stats / history_file
+
+              if history_path.exists():
+                  history = json.loads(history_path.read_text())
+              else:
+                  history = {}
+
+              for item in latest.get(key, []):
+                  history[item["timestamp"]] = {
+                      "count": item["count"],
+                      "uniques": item["uniques"]
+                  }
+
+              history_path.write_text(
+                  json.dumps(history, indent=2, sort_keys=True) + "\n"
+              )
+
+              return history
+
+          clones = merge(
+              "clones-latest.json",
+              "clones-history.json",
+              "clones"
+          )
+
+          views = merge(
+              "views-latest.json",
+              "views-history.json",
+              "views"
+          )
+
+          total_clones = sum(item["count"] for item in clones.values())
+          total_views = sum(item["count"] for item in views.values())
+
+          all_dates = list(clones.keys()) + list(views.keys())
+          tracking_since = min(all_dates)[:10] if all_dates else "-"
+
+          readme_path = Path("README.md")
+          readme = readme_path.read_text()
+
+          block = (
+              "<!-- OPENRF_STATS_START -->\n"
+              "## OpenRF Platform Statistics\n\n"
+              f"- Repository views: **{total_views}**\n"
+              f"- Repository clones: **{total_clones}**\n"
+              f"- Tracking since: **{tracking_since}**\n\n"
+              "<!-- OPENRF_STATS_END -->"
+          )
+
+          pattern = re.compile(
+              r"<!-- OPENRF_STATS_START -->.*?<!-- OPENRF_STATS_END -->",
+              re.S
+          )
+
+          if pattern.search(readme):
+              readme = pattern.sub(block, readme)
+          else:
+              readme += "\n\n---\n\n" + block + "\n"
+
+          readme_path.write_text(readme)
+          PY
+
+      - name: Commit updated statistics
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add stats/ README.md
+
+          if git diff --cached --quiet; then
+            echo "No traffic changes."
+            exit 0
+          fi
+
+          git commit -m "Update repository traffic statistics"
+          git push
