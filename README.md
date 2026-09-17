@@ -527,8 +527,8 @@ Developed by Kocsis Krisztián with implementation assistance, architecture disc
 <!-- OPENRF_STATS_START -->
 ## OpenRF Platform Statistics
 
-- Repository views: **1128**
-- Repository clones: **238**
+- Repository views: **1138**
+- Repository clones: **251**
 - Tracking since: **2026-08-07**
 
 <!-- OPENRF_STATS_END -->
