@@ -9,6 +9,7 @@
 #include "version.h"
 #include "radio.h"
 #include "storage.h"
+#include "raw_slot_matcher.h"
 #include "rxslots.h"
 #include "scratch.h"
 #include "mqtt.h"
@@ -19,6 +20,10 @@
 #include "platform_compat.h"
 #include "dualcore.h"
 #include "psram_buffers.h"
+#include "hardware_status.h"
+#include "protocol_diagnostics.h"
+#include "v2_authoritative_action.h"
+#include "protocol_tx_diagnostics.h"
 
 WebServer server(80);
 
@@ -100,6 +105,36 @@ void handleStatusApi() {
   doc["core0_load_percent"] = dualCoreLoad(0);
   doc["core1_load_percent"] = dualCoreLoad(1);
 
+  const OpenRFHardwareStatus hw = hardwareStatusGet();
+  doc["rf1_online"] = hw.radio1Online;
+  doc["rf2_online"] = hw.radio2Online;
+  doc["lora_online"] = hw.loraOnline;
+
+  doc["rf1_enabled"] = hw.radio1Enabled;
+  doc["rf2_enabled"] = hw.radio2Enabled;
+  doc["lora_enabled"] = hw.loraEnabled;
+
+  doc["rf1_active"] = hw.radio1Active;
+  doc["rf2_active"] = hw.radio2Active;
+  doc["lora_active"] = hw.loraActive;
+
+  doc["rf1_partnum"] = hw.radio1Part;
+  doc["rf1_version"] = hw.radio1Version;
+  doc["rf2_partnum"] = hw.radio2Part;
+  doc["rf2_version"] = hw.radio2Version;
+  doc["lora_version"] = hw.loraVersion;
+  doc["active_cc1101"] = Radio.getActiveRadioId();
+  doc["rf1_rssi_dbm"] = Radio.getRadioRSSI(1);
+  doc["rf2_rssi_dbm"] = Radio.getRadioRSSI(2);
+  doc["rf1_default_frequency_mhz"] = Radio.getDefaultFrequency(1);
+  doc["rf2_default_frequency_mhz"] = Radio.getDefaultFrequency(2);
+  doc["rf1_operating_frequency_mhz"] = Radio.getOperatingFrequency(1);
+  doc["rf2_operating_frequency_mhz"] = Radio.getOperatingFrequency(2);
+  doc["rf1_frequency_tuned"] = Radio.isFrequencyTuned(1);
+  doc["rf2_frequency_tuned"] = Radio.isFrequencyTuned(2);
+  doc["rf1_tune_remaining_ms"] = Radio.getTuneSessionRemainingMs(1);
+  doc["rf2_tune_remaining_ms"] = Radio.getTuneSessionRemainingMs(2);
+
   doc["flash_total"] = ESP.getFlashChipSize();
   doc["flash_total_mb"] = ESP.getFlashChipSize() / (1024UL * 1024UL);
 
@@ -132,6 +167,355 @@ void handleStatusApi() {
 }
 
 
+void handleRadioEnableApi() {
+  if (!server.hasArg("plain")) {
+    sendJsonError(400, "Missing JSON request body");
+    return;
+  }
+
+  JsonDocument doc;
+  if (deserializeJson(doc, server.arg("plain"))) {
+    sendJsonError(400, "Invalid JSON request body");
+    return;
+  }
+
+  if (!doc["radio1_enabled"].is<bool>() ||
+      !doc["radio2_enabled"].is<bool>() ||
+      !doc["lora_enabled"].is<bool>()) {
+    sendJsonError(400, "radio1_enabled, radio2_enabled and lora_enabled are required");
+    return;
+  }
+
+  config.radio1Enabled = doc["radio1_enabled"].as<bool>();
+  config.radio2Enabled = doc["radio2_enabled"].as<bool>();
+  config.loraEnabled = doc["lora_enabled"].as<bool>();
+
+  if (!configSave()) {
+    sendJsonError(500, "Failed to save radio enable configuration");
+    return;
+  }
+
+  JsonDocument response;
+  response["ok"] = true;
+  response["restart_required"] = true;
+  response["message"] = "Radio configuration saved. OpenRF is restarting.";
+
+  String output;
+  serializeJson(response, output);
+  server.sendHeader("Connection", "close");
+  server.send(200, "application/json", output);
+  scheduleRestart(1800, F("radio enable configuration"));
+}
+
+
+void handleFrequencyScanApi() {
+  uint8_t radioId = 2;
+  if (server.hasArg("radio")) {
+    radioId = static_cast<uint8_t>(server.arg("radio").toInt());
+  }
+
+  if (radioId != 1 && radioId != 2) {
+    sendJsonError(400, "radio must be 1 or 2");
+    return;
+  }
+
+  const bool enabled =
+      radioId == 1 ? config.radio1Enabled : config.radio2Enabled;
+
+  if (!enabled) {
+    sendJsonError(409, radioId == 1
+        ? "CC1101 Radio 1 is disabled in System"
+        : "CC1101 Radio 2 is disabled in System");
+    return;
+  }
+
+  if (!Radio.isRadioActive(radioId)) {
+    sendJsonError(409, radioId == 1
+        ? "CC1101 Radio 1 is not ACTIVE"
+        : "CC1101 Radio 2 is not ACTIVE");
+    return;
+  }
+
+  float startMHz = radioId == 1 ? 433.60F : 867.80F;
+  float endMHz = radioId == 1 ? 434.20F : 868.90F;
+  float stepMHz = 0.025F;
+  uint16_t dwellMs = 35;
+  uint8_t passes = 4;
+
+  if (server.hasArg("start")) startMHz = server.arg("start").toFloat();
+  if (server.hasArg("end")) endMHz = server.arg("end").toFloat();
+  if (server.hasArg("step")) stepMHz = server.arg("step").toFloat();
+  if (server.hasArg("dwell")) {
+    dwellMs = static_cast<uint16_t>(server.arg("dwell").toInt());
+  }
+  if (server.hasArg("passes")) {
+    passes = static_cast<uint8_t>(server.arg("passes").toInt());
+  }
+
+  const float minMHz = radioId == 1 ? 430.0F : 867.0F;
+  const float maxMHz = radioId == 1 ? 440.0F : 870.0F;
+
+  startMHz = constrain(startMHz, minMHz, maxMHz);
+  endMHz = constrain(endMHz, minMHz, maxMHz);
+  stepMHz = constrain(stepMHz, 0.010F, 0.100F);
+  dwellMs = constrain(
+      dwellMs,
+      static_cast<uint16_t>(15),
+      static_cast<uint16_t>(150));
+  passes = constrain(
+      passes,
+      static_cast<uint8_t>(1),
+      static_cast<uint8_t>(10));
+
+  if (endMHz <= startMHz) {
+    sendJsonError(400, "Scan end must be above scan start");
+    return;
+  }
+
+  const uint16_t sampleCount =
+      static_cast<uint16_t>(((endMHz - startMHz) / stepMHz) + 1.5F);
+
+  if (sampleCount < 2 || sampleCount > 160) {
+    sendJsonError(400, "Scan range/step produces an invalid sample count");
+    return;
+  }
+
+  float bestRssi[160];
+  float frequencies[160];
+
+  for (uint16_t i = 0; i < sampleCount; ++i) {
+    bestRssi[i] = -127.0F;
+    frequencies[i] = startMHz + static_cast<float>(i) * stepMHz;
+  }
+
+  // Multi-pass sweep:
+  // every pass revisits every frequency bin, retaining the strongest RSSI ever
+  // observed at that bin. This makes short burst-mode remotes much less likely
+  // to be missed at a particular frequency.
+  for (uint8_t pass = 0; pass < passes; ++pass) {
+    for (uint16_t i = 0; i < sampleCount; ++i) {
+      const float frequency = frequencies[i];
+      if (frequency > endMHz + 0.0005F) break;
+
+      float rssi = -127.0F;
+      if (!Radio.scanRssi(radioId, frequency, rssi, dwellMs)) {
+        sendJsonError(500, "Frequency scan failed while retuning");
+        return;
+      }
+
+      if (rssi > bestRssi[i]) bestRssi[i] = rssi;
+      yield();
+    }
+  }
+
+  uint16_t peakIndex = 0;
+  for (uint16_t i = 1; i < sampleCount; ++i) {
+    if (bestRssi[i] > bestRssi[peakIndex]) peakIndex = i;
+  }
+
+  const float strongestRssi = bestRssi[peakIndex];
+  const float strongestFrequency = frequencies[peakIndex];
+
+  // Estimate the carrier from the response plateau instead of trusting one
+  // discrete peak bin. Use every bin within 3 dB of the peak and weight its
+  // frequency by linear signal power converted from dBm.
+  double weightedFrequency = 0.0;
+  double totalWeight = 0.0;
+
+  for (uint16_t i = 0; i < sampleCount; ++i) {
+    if (bestRssi[i] >= strongestRssi - 3.0F) {
+      const double linearPower = pow(10.0, bestRssi[i] / 10.0);
+      weightedFrequency += linearPower * frequencies[i];
+      totalWeight += linearPower;
+    }
+  }
+
+  const float estimatedCarrier =
+      totalWeight > 0.0
+          ? static_cast<float>(weightedFrequency / totalWeight)
+          : strongestFrequency;
+
+  // Robust local noise floor from the quietest 60 % of final per-bin peaks.
+  float sorted[160];
+  for (uint16_t i = 0; i < sampleCount; ++i) sorted[i] = bestRssi[i];
+
+  for (uint16_t i = 1; i < sampleCount; ++i) {
+    const float value = sorted[i];
+    int16_t j = static_cast<int16_t>(i) - 1;
+    while (j >= 0 && sorted[j] > value) {
+      sorted[j + 1] = sorted[j];
+      --j;
+    }
+    sorted[j + 1] = value;
+  }
+
+  uint16_t quietCount =
+      static_cast<uint16_t>((sampleCount * 60UL) / 100UL);
+  if (quietCount < 1) quietCount = 1;
+
+  float quietSum = 0.0F;
+  for (uint16_t i = 0; i < quietCount; ++i) {
+    quietSum += sorted[i];
+  }
+
+  const float noiseFloor = quietSum / quietCount;
+  const float signalAboveNoise = strongestRssi - noiseFloor;
+
+  constexpr float SIGNAL_DETECTION_DELTA_DB = 12.0F;
+  const bool signalDetected =
+      strongestRssi > -115.0F &&
+      signalAboveNoise >= SIGNAL_DETECTION_DELTA_DB;
+
+  const char* signalQuality = "NONE";
+  if (signalDetected) {
+    if (signalAboveNoise >= 30.0F) {
+      signalQuality = "STRONG";
+    } else if (signalAboveNoise >= 20.0F) {
+      signalQuality = "GOOD";
+    } else {
+      signalQuality = "DETECTED";
+    }
+  }
+
+  JsonDocument doc;
+  doc["ok"] = true;
+  doc["radio"] = radioId;
+  doc["start_mhz"] = startMHz;
+  doc["end_mhz"] = endMHz;
+  doc["step_mhz"] = stepMHz;
+  doc["dwell_ms"] = dwellMs;
+  doc["passes"] = passes;
+
+  JsonArray samples = doc["samples"].to<JsonArray>();
+  for (uint16_t i = 0; i < sampleCount; ++i) {
+    JsonObject point = samples.add<JsonObject>();
+    point["frequency_mhz"] = serialized(String(frequencies[i], 3));
+    point["rssi_dbm"] = serialized(String(bestRssi[i], 1));
+  }
+
+  doc["strongest_frequency_mhz"] =
+      serialized(String(strongestFrequency, 3));
+  doc["strongest_rssi_dbm"] =
+      serialized(String(strongestRssi, 1));
+  doc["estimated_carrier_mhz"] =
+      serialized(String(estimatedCarrier, 4));
+  doc["noise_floor_dbm"] =
+      serialized(String(noiseFloor, 1));
+  doc["signal_above_noise_db"] =
+      serialized(String(signalAboveNoise, 1));
+  doc["signal_detected"] = signalDetected;
+  doc["signal_quality"] = signalQuality;
+  doc["detection_threshold_db"] = SIGNAL_DETECTION_DELTA_DB;
+  doc["current_operating_frequency_mhz"] =
+      serialized(String(Radio.getOperatingFrequency(radioId), 4));
+
+  String output;
+  serializeJson(doc, output);
+  server.send(200, "application/json", output);
+}
+
+void handleFrequencyTuneApi() {
+  if (!server.hasArg("plain")) {
+    sendJsonError(400, "Missing JSON request body");
+    return;
+  }
+
+  JsonDocument doc;
+  if (deserializeJson(doc, server.arg("plain"))) {
+    sendJsonError(400, "Invalid JSON request body");
+    return;
+  }
+
+  const uint8_t radioId = doc["radio"] | 0;
+  const float frequencyMHz = doc["frequency_mhz"] | 0.0F;
+
+  if (radioId != 1 && radioId != 2) {
+    sendJsonError(400, "radio must be 1 or 2");
+    return;
+  }
+
+  const float minMHz = radioId == 1 ? 430.0F : 867.0F;
+  const float maxMHz = radioId == 1 ? 440.0F : 870.0F;
+
+  if (frequencyMHz < minMHz || frequencyMHz > maxMHz) {
+    sendJsonError(400, "frequency is outside the supported radio range");
+    return;
+  }
+
+  if (!Radio.setOperatingFrequency(radioId, frequencyMHz)) {
+    sendJsonError(500, "Failed to tune radio");
+    return;
+  }
+
+  // Step 26.2.1: persist the tuned Operating frequency. If OpenRF reboots
+  // during a TUNED session, the same frequency is restored with a fresh
+  // 15-minute safety window.
+  if (radioId == 1) config.radio1FrequencyMhz = frequencyMHz;
+  else config.radio2FrequencyMhz = frequencyMHz;
+  if (!configSave()) {
+    sendJsonError(500, "Radio tuned, but failed to save tuning session");
+    return;
+  }
+
+  JsonDocument response;
+  response["ok"] = true;
+  response["radio"] = radioId;
+  response["default_frequency_mhz"] = Radio.getDefaultFrequency(radioId);
+  response["frequency_mhz"] = Radio.getOperatingFrequency(radioId);
+  response["frequency_tuned"] = Radio.isFrequencyTuned(radioId);
+  response["tune_remaining_ms"] = Radio.getTuneSessionRemainingMs(radioId);
+  response["message"] = "Radio tuned for 15 minutes";
+
+  String output;
+  serializeJson(response, output);
+  server.send(200, "application/json", output);
+}
+
+
+void handleFrequencyRestoreApi() {
+  if (!server.hasArg("plain")) {
+    sendJsonError(400, "Missing JSON request body");
+    return;
+  }
+
+  JsonDocument doc;
+  if (deserializeJson(doc, server.arg("plain"))) {
+    sendJsonError(400, "Invalid JSON request body");
+    return;
+  }
+
+  const uint8_t radioId = doc["radio"] | 0;
+  if (radioId != 1 && radioId != 2) {
+    sendJsonError(400, "radio must be 1 or 2");
+    return;
+  }
+
+  if (!Radio.restoreDefaultFrequency(radioId)) {
+    sendJsonError(500, "Failed to restore Default frequency");
+    return;
+  }
+  if (radioId == 1) config.radio1FrequencyMhz = Radio.getDefaultFrequency(1);
+  else config.radio2FrequencyMhz = Radio.getDefaultFrequency(2);
+  if (!configSave()) {
+    sendJsonError(500, "Default restored, but failed to save configuration");
+    return;
+  }
+
+  JsonDocument response;
+  response["ok"] = true;
+  response["radio"] = radioId;
+  response["default_frequency_mhz"] = Radio.getDefaultFrequency(radioId);
+  response["frequency_mhz"] = Radio.getOperatingFrequency(radioId);
+  response["frequency_tuned"] = false;
+  response["tune_remaining_ms"] = 0;
+  response["message"] = "Default frequency restored";
+
+  String output;
+  serializeJson(response, output);
+  server.send(200, "application/json", output);
+}
+
+
 void handleRadioApi() {
   JsonDocument doc;
 
@@ -141,8 +525,385 @@ void handleRadioApi() {
   doc["mode"] = Radio.getModeName();
   doc["receiving"] = Radio.isReceiving();
   doc["rssi_dbm"] = Radio.getRSSI();
+  doc["rf1_rssi_dbm"] = Radio.getRadioRSSI(1);
+  doc["rf2_rssi_dbm"] = Radio.getRadioRSSI(2);
+  doc["rf1_active"] = Radio.isRadioActive(1);
+  doc["rf2_active"] = Radio.isRadioActive(2);
+  doc["dual_radio"] = Radio.isRadioActive(1) && Radio.isRadioActive(2);
   doc["last_error"] = Radio.getLastError();
   doc["modulation"] = "OOK";
+  doc["rf1_default_frequency_mhz"] = Radio.getDefaultFrequency(1);
+  doc["rf2_default_frequency_mhz"] = Radio.getDefaultFrequency(2);
+  doc["rf1_operating_frequency_mhz"] = Radio.getOperatingFrequency(1);
+  doc["rf2_operating_frequency_mhz"] = Radio.getOperatingFrequency(2);
+  doc["rf1_frequency_tuned"] = Radio.isFrequencyTuned(1);
+  doc["rf2_frequency_tuned"] = Radio.isFrequencyTuned(2);
+  doc["rf1_tune_remaining_ms"] = Radio.getTuneSessionRemainingMs(1);
+  doc["rf2_tune_remaining_ms"] = Radio.getTuneSessionRemainingMs(2);
+
+  const RadioChannelDiagnostics rf1Diag = Radio.getChannelDiagnostics(1);
+  const RadioChannelDiagnostics rf2Diag = Radio.getChannelDiagnostics(2);
+
+  JsonObject rf1Capture = doc["radio1_capture"].to<JsonObject>();
+  rf1Capture["edges"] = rf1Diag.edges;
+  rf1Capture["raw_candidates"] = rf1Diag.rawCandidates;
+  rf1Capture["accepted_frames"] = rf1Diag.acceptedFrames;
+  rf1Capture["rejected_frames"] = rf1Diag.rejectedFrames;
+  rf1Capture["current_pulses"] = rf1Diag.currentPulses;
+  rf1Capture["ignored_glitch_edges"] = rf1Diag.ignoredGlitchEdges;
+  rf1Capture["ignored_while_frame_ready"] = rf1Diag.ignoredWhileFrameReady;
+  rf1Capture["short_gap_resets"] = rf1Diag.shortGapResets;
+  rf1Capture["gap_finalized"] = rf1Diag.gapFinalizedFrames;
+  rf1Capture["timeout_finalized"] = rf1Diag.timeoutFinalizedFrames;
+  rf1Capture["stale_partial_finalized"] =
+      rf1Diag.stalePartialFinalizedFrames;
+  rf1Capture["buffer_full"] = rf1Diag.bufferFullFrames;
+  rf1Capture["merged_same_sign"] = rf1Diag.mergedSameSignPulses;
+  rf1Capture["frame_ready"] = rf1Diag.frameReady;
+  rf1Capture["pending_age_us"] = rf1Diag.pendingAgeUs;
+  rf1Capture["last_finalized_pulses"] = rf1Diag.lastFinalizedPulses;
+  rf1Capture["last_finalized_duration_us"] = rf1Diag.lastFinalizedDurationUs;
+  rf1Capture["last_finalized_age_ms"] =
+      rf1Diag.lastFinalizedAtMs ? millis() - rf1Diag.lastFinalizedAtMs : 0;
+  rf1Capture["last_finalize_reason"] = rf1Diag.lastFinalizeReason;
+  rf1Capture["last_validation_result"] = rf1Diag.lastValidationResult;
+
+  JsonObject rf2Capture = doc["radio2_capture"].to<JsonObject>();
+  rf2Capture["edges"] = rf2Diag.edges;
+  rf2Capture["raw_candidates"] = rf2Diag.rawCandidates;
+  rf2Capture["accepted_frames"] = rf2Diag.acceptedFrames;
+  rf2Capture["rejected_frames"] = rf2Diag.rejectedFrames;
+  rf2Capture["current_pulses"] = rf2Diag.currentPulses;
+  rf2Capture["ignored_glitch_edges"] = rf2Diag.ignoredGlitchEdges;
+  rf2Capture["ignored_while_frame_ready"] = rf2Diag.ignoredWhileFrameReady;
+  rf2Capture["short_gap_resets"] = rf2Diag.shortGapResets;
+  rf2Capture["gap_finalized"] = rf2Diag.gapFinalizedFrames;
+  rf2Capture["timeout_finalized"] = rf2Diag.timeoutFinalizedFrames;
+  rf2Capture["stale_partial_finalized"] =
+      rf2Diag.stalePartialFinalizedFrames;
+  rf2Capture["buffer_full"] = rf2Diag.bufferFullFrames;
+  rf2Capture["merged_same_sign"] = rf2Diag.mergedSameSignPulses;
+  rf2Capture["frame_ready"] = rf2Diag.frameReady;
+  rf2Capture["pending_age_us"] = rf2Diag.pendingAgeUs;
+  rf2Capture["last_finalized_pulses"] = rf2Diag.lastFinalizedPulses;
+  rf2Capture["last_finalized_duration_us"] = rf2Diag.lastFinalizedDurationUs;
+  rf2Capture["last_finalized_age_ms"] =
+      rf2Diag.lastFinalizedAtMs ? millis() - rf2Diag.lastFinalizedAtMs : 0;
+  rf2Capture["last_finalize_reason"] = rf2Diag.lastFinalizeReason;
+  rf2Capture["last_validation_result"] = rf2Diag.lastValidationResult;
+
+  const ProtocolDiagnosticsSnapshot protocolDiag =
+      protocolDiagnosticsGetSnapshot();
+  JsonObject protocol = doc["protocol_diagnostics"].to<JsonObject>();
+  protocol["available"] = protocolDiag.available;
+  protocol["sequence"] = protocolDiag.sequence;
+  protocol["age_ms"] =
+      protocolDiag.available ? millis() - protocolDiag.capturedAtMs : 0;
+  protocol["radio_id"] = protocolDiag.radioId;
+  protocol["pulse_count"] = protocolDiag.pulseCount;
+  protocol["duration_us"] = protocolDiag.durationUs;
+  protocol["frequency_mhz"] = protocolDiag.frequencyMHz;
+  protocol["rssi_dbm"] = protocolDiag.rssiDbm;
+  protocol["frame_accepted"] = protocolDiag.frameAccepted;
+  protocol["v2_evaluated"] = protocolDiag.v2Evaluated;
+  protocol["v2_protocol"] =
+      protocolDiagnosticsV2ProtocolName(protocolDiag.v2Protocol);
+  protocol["v2_result"] =
+      protocolDiagnosticsV2StatusName(protocolDiag.v2Status);
+  protocol["registered_decoders"] = protocolDiag.registeredDecoders;
+  protocol["evaluated_decoders"] = protocolDiag.evaluatedDecoders;
+  protocol["v2_matches"] = protocolDiag.v2MatchCount;
+  protocol["v2_no_matches"] = protocolDiag.v2NoMatchCount;
+  protocol["v2_decision"] = protocolEngineDecisionStateName(protocolDiag.v2Decision);
+  protocol["v2_candidate_count"] = protocolDiag.v2CandidateCount;
+  protocol["v2_selected_protocol"] =
+      protocolDiagnosticsV2ProtocolName(protocolDiag.v2SelectedProtocol);
+  JsonArray v2Candidates = protocol["v2_candidates"].to<JsonArray>();
+  for (uint8_t index = 0;
+       index < protocolDiag.v2CandidateCount && index < kProtocolEngineMaxCandidates;
+       ++index) {
+    v2Candidates.add(protocolDiagnosticsV2ProtocolName(protocolDiag.v2Candidates[index]));
+  }
+  JsonObject decisionCounts = protocol["v2_decision_counts"].to<JsonObject>();
+  decisionCounts["unknown"] = protocolDiag.v2UnknownDecisionCount;
+  decisionCounts["known"] = protocolDiag.v2KnownDecisionCount;
+  decisionCounts["ambiguous"] = protocolDiag.v2AmbiguousDecisionCount;
+
+  JsonObject normalized = protocol["v2_normalized_event"].to<JsonObject>();
+  normalized["available"] = protocolDiag.v2NormalizedEventAvailable;
+  normalized["count"] = protocolDiag.v2NormalizedEventCount;
+  if (protocolDiag.v2NormalizedEventAvailable) {
+    const NormalizedRfEvent& event = protocolDiag.v2NormalizedEvent;
+    normalized["protocol"] = protocolDiagnosticsV2ProtocolName(event.protocol);
+    normalized["code"] = uint64Hex(event.code);
+    normalized["symbol_count"] = event.symbolCount;
+    normalized["repeats"] = event.repeats;
+    normalized["radio_id"] = event.radioId;
+    normalized["raw_pulses"] = event.rawPulseCount;
+    normalized["raw_duration_us"] = event.rawDurationUs;
+    normalized["captured_at_ms"] = event.capturedAtMs;
+    normalized["frequency_mhz"] = event.frequencyMHz;
+    normalized["rssi_dbm"] = event.rssiDbm;
+  }
+
+  JsonObject lastKnown = protocol["v2_last_known_event"].to<JsonObject>();
+  lastKnown["available"] = protocolDiag.v2LastKnownEventAvailable;
+  if (protocolDiag.v2LastKnownEventAvailable) {
+    const NormalizedRfEvent& event = protocolDiag.v2LastKnownEvent;
+    lastKnown["protocol"] = protocolDiagnosticsV2ProtocolName(event.protocol);
+    lastKnown["code"] = uint64Hex(event.code);
+    lastKnown["symbol_count"] = event.symbolCount;
+    lastKnown["repeats"] = event.repeats;
+    lastKnown["radio_id"] = event.radioId;
+    lastKnown["frequency_mhz"] = event.frequencyMHz;
+    lastKnown["rssi_dbm"] = event.rssiDbm;
+    lastKnown["captured_at_ms"] = event.capturedAtMs;
+    lastKnown["age_ms"] = millis() - event.capturedAtMs;
+  }
+
+  JsonObject dedup = protocol["v2_event_dedup"].to<JsonObject>();
+  dedup["state"] = normalizedEventDedupStateName(protocolDiag.v2Dedup.state);
+  dedup["window_ms"] = normalizedEventDedupWindowMs(protocolDiag.v2NormalizedEvent.protocol);
+  dedup["nvkp_window_ms"] = kNvkp01EventDedupWindowMs;
+  dedup["delta_ms"] = protocolDiag.v2Dedup.deltaMs;
+  dedup["collapsed_in_burst"] = protocolDiag.v2Dedup.collapsedInBurst;
+  dedup["normalized_input_count"] = protocolDiag.v2NormalizedEventCount;
+  dedup["logical_event_count"] = protocolDiag.v2LogicalEventCount;
+  dedup["collapsed_count"] = protocolDiag.v2CollapsedEventCount;
+
+  JsonObject actionable = protocol["v2_actionable_dry_run"].to<JsonObject>();
+  actionable["state"] =
+      v2ActionableDryRunStateName(protocolDiag.v2ActionableDryRun.state);
+  actionable["available"] = protocolDiag.v2ActionableDryRun.available;
+  actionable["rx_slot_candidate"] =
+      protocolDiag.v2ActionableDryRun.rxSlotCandidate;
+  actionable["mqtt_candidate"] =
+      protocolDiag.v2ActionableDryRun.mqttCandidate;
+  actionable["home_assistant_candidate"] =
+      protocolDiag.v2ActionableDryRun.homeAssistantCandidate;
+  actionable["would_emit_count"] =
+      protocolDiag.v2ActionableWouldEmitCount;
+  actionable["suppressed_duplicate_count"] =
+      protocolDiag.v2ActionableSuppressedDuplicateCount;
+  if (protocolDiag.v2ActionableDryRun.available) {
+    const NormalizedRfEvent& event = protocolDiag.v2ActionableDryRun.event;
+    actionable["protocol"] = protocolDiagnosticsV2ProtocolName(event.protocol);
+    actionable["code"] = uint64Hex(event.code);
+    actionable["radio_id"] = event.radioId;
+  }
+
+  const V2AuthoritativeStatus authoritativeStatus =
+      v2AuthoritativeActionGetStatus();
+  JsonObject authoritative =
+      protocol["v2_authoritative_action"].to<JsonObject>();
+  authoritative["enabled"] = true;
+  authoritative["persisted"] = true;
+  authoritative["mode"] = "V2_ONLY";
+  authoritative["boot_default"] = "V2_ONLY";
+  authoritative["legacy_decode_policy"] = "RETIRED";
+  authoritative["route_state"] =
+      v2AuthoritativeRouteStateName(authoritativeStatus.lastState);
+  authoritative["last_protocol"] =
+      protocolDiagnosticsV2ProtocolName(authoritativeStatus.lastProtocol);
+  authoritative["last_code"] =
+      authoritativeStatus.lastProtocol != ProtocolId::UNKNOWN
+          ? uint64Hex(authoritativeStatus.lastCode)
+          : String();
+  authoritative["v2_emit_count"] = authoritativeStatus.v2EmitCount;
+  authoritative["duplicate_suppressed_count"] =
+      authoritativeStatus.duplicateSuppressedCount;
+  authoritative["unknown_no_action_count"] =
+      authoritativeStatus.unknownNoActionCount;
+  authoritative["unsupported_no_action_count"] =
+      authoritativeStatus.unsupportedNoActionCount;
+  authoritative["nvkp_confirmation_pending_count"] =
+      authoritativeStatus.nvkpConfirmationPendingCount;
+  authoritative["approved_ev1527"] = true;
+  authoritative["approved_pt2262"] = true;
+  authoritative["approved_ht12e"] = true;
+  authoritative["approved_nvkp01"] = true;
+
+  const RawSlotMatcherDiagnostics rawMatcherStatus =
+      rawSlotMatcherGetDiagnostics();
+  JsonObject rawMatcher = protocol["learned_raw_matcher"].to<JsonObject>();
+  rawMatcher["available"] = rawMatcherStatus.available;
+  rawMatcher["state"] = rawSlotMatchStateName(rawMatcherStatus.lastState);
+  rawMatcher["slot"] = rawMatcherStatus.lastSlot;
+  rawMatcher["similarity"] = rawMatcherStatus.lastSimilarity;
+  rawMatcher["timing_similarity"] = rawMatcherStatus.lastTimingSimilarity;
+  rawMatcher["count_similarity"] = rawMatcherStatus.lastCountSimilarity;
+  rawMatcher["sign_agreement"] = rawMatcherStatus.lastSignAgreement;
+  rawMatcher["compared_pulses"] = rawMatcherStatus.lastComparedPulses;
+  rawMatcher["learned_pattern_pulses"] = rawMatcherStatus.learnedPatternPulses;
+  rawMatcher["incoming_pattern_pulses"] = rawMatcherStatus.incomingPatternPulses;
+  rawMatcher["learned_repeat_reduced"] = rawMatcherStatus.learnedRepeatReduced;
+  rawMatcher["incoming_repeat_reduced"] = rawMatcherStatus.incomingRepeatReduced;
+  rawMatcher["match_count"] = rawMatcherStatus.matchCount;
+  rawMatcher["no_match_count"] = rawMatcherStatus.noMatchCount;
+  rawMatcher["duplicate_suppressed_count"] =
+      rawMatcherStatus.duplicateSuppressedCount;
+
+  JsonObject nvkp = protocol["v2_nvkp01"].to<JsonObject>();
+  nvkp["available"] = protocolDiag.nvkp01DiagnosticsAvailable;
+  nvkp["result"] = protocolDiagnosticsV2StatusName(protocolDiag.nvkp01Status);
+  if (protocolDiag.nvkp01DiagnosticsAvailable) {
+    const Nvkp01DecodeDiagnostics& d = protocolDiag.nvkp01;
+    nvkp["reject_reason"] = nvkp01RejectReasonName(d.rejectReason);
+    nvkp["pulse_count"] = d.pulseCount;
+    nvkp["duration_us"] = d.durationUs;
+    nvkp["alternating"] = d.alternating;
+    nvkp["canonical_pulse_count"] = d.canonicalPulseCount;
+    nvkp["merged_pulses"] = d.mergedPulses;
+    nvkp["structure"] = d.syncStructure ? "SYNC_SMQ" :
+        (d.compactStructure ? "COMPACT_CELLS" : "NONE");
+    nvkp["marker_pairs"] = d.markerPairs;
+    nvkp["sync_pulses"] = d.syncPulses;
+    nvkp["full_leader"] = d.fullLeader;
+    nvkp["code_available"] = d.codeAvailable;
+    nvkp["code"] = d.codeAvailable ? uint64Hex(d.normalizedCode) : String();
+    nvkp["repeats"] = d.repeatCount;
+  }
+  JsonObject nvReject = nvkp["reject_counts"].to<JsonObject>();
+  nvReject["capture_envelope"] = protocolDiag.nvkp01RejectCounts[static_cast<size_t>(Nvkp01RejectReason::CAPTURE_ENVELOPE)];
+  nvReject["polarity_sequence"] = protocolDiag.nvkp01RejectCounts[static_cast<size_t>(Nvkp01RejectReason::POLARITY_SEQUENCE)];
+  nvReject["marker_structure"] = protocolDiag.nvkp01RejectCounts[static_cast<size_t>(Nvkp01RejectReason::MARKER_STRUCTURE)];
+
+
+  JsonObject ht = protocol["v2_ht12e"].to<JsonObject>();
+  ht["available"] = protocolDiag.ht12eDiagnosticsAvailable;
+  ht["result"] = protocolDiagnosticsV2StatusName(protocolDiag.ht12eStatus);
+  if (protocolDiag.ht12eDiagnosticsAvailable) {
+    const Ht12eDecodeDiagnostics& d = protocolDiag.ht12e;
+    ht["reject_reason"] = ht12eRejectReasonName(d.rejectReason);
+    ht["pulse_count"] = d.pulseCount;
+    ht["duration_us"] = d.durationUs;
+    ht["alternating"] = d.alternating;
+    ht["candidate_words"] = d.candidateWords;
+    ht["valid_words"] = d.validWords;
+    ht["matching_words"] = d.matchingWords;
+    ht["estimated_t_us"] = d.estimatedTUs;
+    ht["pilot_min_us"] = d.pilotMinUs;
+    ht["pilot_max_us"] = d.pilotMaxUs;
+    ht["short_min_us"] = d.shortMinUs;
+    ht["short_max_us"] = d.shortMaxUs;
+    ht["long_min_us"] = d.longMinUs;
+    ht["long_max_us"] = d.longMaxUs;
+    ht["code_available"] = d.codeAvailable;
+    ht["code"] = d.codeAvailable ? uint64Hex(d.decodedWord) : String();
+    ht["address"] = d.address;
+    ht["data"] = d.data;
+    ht["repeats"] = d.repeatCount;
+  }
+  JsonObject htReject = ht["reject_counts"].to<JsonObject>();
+  htReject["capture_envelope"] = protocolDiag.ht12eRejectCounts[static_cast<size_t>(Ht12eRejectReason::CAPTURE_ENVELOPE)];
+  htReject["polarity_sequence"] = protocolDiag.ht12eRejectCounts[static_cast<size_t>(Ht12eRejectReason::POLARITY_SEQUENCE)];
+  htReject["pilot_sync"] = protocolDiag.ht12eRejectCounts[static_cast<size_t>(Ht12eRejectReason::PILOT_SYNC)];
+  htReject["symbol_timing"] = protocolDiag.ht12eRejectCounts[static_cast<size_t>(Ht12eRejectReason::SYMBOL_TIMING)];
+  htReject["repeat_mismatch"] = protocolDiag.ht12eRejectCounts[static_cast<size_t>(Ht12eRejectReason::REPEAT_MISMATCH)];
+
+  JsonObject ev1527 = protocol["ev1527"].to<JsonObject>();
+  ev1527["available"] = protocolDiag.ev1527DiagnosticsAvailable;
+  if (protocolDiag.ev1527DiagnosticsAvailable) {
+    const Ev1527DecodeDiagnostics& d = protocolDiag.ev1527;
+    const Ev1527DecoderLimits& limits = ev1527DecoderLimits();
+    ev1527["reject_reason"] = ev1527RejectReasonName(d.rejectReason);
+    ev1527["candidate_frames"] = d.candidateFrameCount;
+    ev1527["valid_frames"] = d.validFrameCount;
+    ev1527["first_valid_frame"] = d.firstValidFrame;
+    ev1527["first_failing_frame"] = d.firstFailingFrame;
+    ev1527["decoded_code"] =
+        d.codeAvailable ? uint64Hex(d.decodedCode) : String();
+    ev1527["base_t_us"] = d.estimatedBasePulseUs;
+    ev1527["short_range_available"] = d.pulseRangeAvailable;
+    ev1527["short_min_us"] = d.observedShortMinUs;
+    ev1527["short_max_us"] = d.observedShortMaxUs;
+    ev1527["long_min_us"] = d.observedLongMinUs;
+    ev1527["long_max_us"] = d.observedLongMaxUs;
+    ev1527["ratio_min"] = d.observedRatioMinX100 / 100.0F;
+    ev1527["ratio_max"] = d.observedRatioMaxX100 / 100.0F;
+    ev1527["sync_low_available"] = d.syncLowAvailable;
+    ev1527["sync_low_t"] = d.observedSyncLowTX100 / 100.0F;
+    ev1527["repeat_frames"] = d.repeatFrameCount;
+    ev1527["matching_repeats"] = d.matchingRepeatCount;
+    ev1527["repeat_deviation_pct"] =
+        d.maximumRepeatBaseDeviationX10Percent / 10.0F;
+    ev1527["address_check"] = ev1527CheckStateName(d.addressPattern);
+    ev1527["command_check"] = ev1527CheckStateName(d.commandPattern);
+
+    JsonObject allowed = ev1527["allowed"].to<JsonObject>();
+    allowed["base_t_min_us"] = limits.minimumBasePulseUs;
+    allowed["base_t_max_us"] = limits.maximumBasePulseUs;
+    allowed["short_tolerance_pct"] = limits.shortTolerancePercent;
+    allowed["long_tolerance_pct"] = limits.longTolerancePercent;
+    allowed["pair_tolerance_pct"] = limits.pairTolerancePercent;
+    allowed["sync_high_tolerance_pct"] = limits.syncHighTolerancePercent;
+    allowed["ratio_min"] = limits.minimumLongShortRatioX100 / 100.0F;
+    allowed["ratio_max"] = limits.maximumLongShortRatioX100 / 100.0F;
+    allowed["sync_low_t_min"] = limits.minimumSyncLowTX100 / 100.0F;
+    allowed["sync_low_t_max"] = limits.maximumSyncLowTX100 / 100.0F;
+    allowed["repeat_deviation_max_pct"] =
+        limits.maximumRepeatBaseDeviationPercent;
+    allowed["bits_per_frame"] = limits.expectedBitsPerFrame;
+  }
+
+  JsonObject rejectCounts = ev1527["reject_counts"].to<JsonObject>();
+  for (size_t index = 1; index < kEv1527RejectReasonCount; ++index) {
+    rejectCounts[ev1527RejectReasonName(
+        static_cast<Ev1527RejectReason>(index))] =
+        protocolDiag.ev1527RejectCounts[index];
+  }
+
+  JsonObject pt2262 = protocol["pt2262"].to<JsonObject>();
+  pt2262["available"] = protocolDiag.pt2262DiagnosticsAvailable;
+  pt2262["result"] = protocolDiagnosticsV2StatusName(protocolDiag.pt2262Status);
+  if (protocolDiag.pt2262DiagnosticsAvailable) {
+    const Pt2262DecodeDiagnostics& d = protocolDiag.pt2262;
+    const Pt2262DecoderLimits& limits = pt2262DecoderLimits();
+    pt2262["reject_reason"] = pt2262RejectReasonName(d.rejectReason);
+    pt2262["candidate_frames"] = d.candidateFrameCount;
+    pt2262["valid_frames"] = d.validFrameCount;
+    pt2262["first_valid_frame"] = d.firstValidFrame;
+    pt2262["first_failing_frame"] = d.firstFailingFrame;
+    pt2262["decoded_code"] =
+        d.codeAvailable ? uint64Hex(d.decodedCode) : String();
+    pt2262["decoded_trits"] = d.decodedTritCount;
+    pt2262["zero_trits"] = d.zeroTritCount;
+    pt2262["one_trits"] = d.oneTritCount;
+    pt2262["floating_trits"] = d.floatingTritCount;
+    pt2262["base_t_us"] = d.estimatedBasePulseUs;
+    pt2262["pulse_range_available"] = d.pulseRangeAvailable;
+    pt2262["short_min_us"] = d.observedShortMinUs;
+    pt2262["short_max_us"] = d.observedShortMaxUs;
+    pt2262["long_min_us"] = d.observedLongMinUs;
+    pt2262["long_max_us"] = d.observedLongMaxUs;
+    pt2262["ratio_min"] = d.observedRatioMinX100 / 100.0F;
+    pt2262["ratio_max"] = d.observedRatioMaxX100 / 100.0F;
+    pt2262["sync_low_available"] = d.syncLowAvailable;
+    pt2262["sync_low_t"] = d.observedSyncLowTX100 / 100.0F;
+    pt2262["repeat_frames"] = d.repeatFrameCount;
+    pt2262["matching_repeats"] = d.matchingRepeatCount;
+    pt2262["repeat_deviation_pct"] =
+        d.maximumRepeatBaseDeviationX10Percent / 10.0F;
+
+    JsonObject allowed = pt2262["allowed"].to<JsonObject>();
+    allowed["base_t_min_us"] = limits.minimumBasePulseUs;
+    allowed["base_t_max_us"] = limits.maximumBasePulseUs;
+    allowed["classification_tolerance_pct"] =
+        limits.classificationTolerancePercent;
+    allowed["ratio_min"] = limits.minimumLongShortRatioX100 / 100.0F;
+    allowed["ratio_max"] = limits.maximumLongShortRatioX100 / 100.0F;
+    allowed["sync_low_t_min"] = limits.minimumSyncLowTX100 / 100.0F;
+    allowed["sync_low_t_max"] = limits.maximumSyncLowTX100 / 100.0F;
+    allowed["repeat_deviation_max_pct"] =
+        limits.maximumRepeatBaseDeviationPercent;
+    allowed["trits_per_frame"] = limits.expectedTritsPerFrame;
+  }
+  JsonObject ptRejectCounts = pt2262["reject_counts"].to<JsonObject>();
+  for (size_t index = 1; index < kPt2262RejectReasonCount; ++index) {
+    ptRejectCounts[pt2262RejectReasonName(
+        static_cast<Pt2262RejectReason>(index))] =
+        protocolDiag.pt2262RejectCounts[index];
+  }
 
   String output;
   serializeJson(doc, output);
@@ -174,6 +935,8 @@ void handleRadioRawApi() {
   output += ",\"pulse_count\":" + String(copied);
   output += ",\"duration_us\":" + String(info.durationUs);
   output += ",\"rssi_dbm\":" + String(info.rssiDbm, 1);
+  output += ",\"frequency_mhz\":" + String(info.frequencyMHz, 3);
+  output += ",\"radio_id\":" + String(info.radioId);
   output += ",\"age_ms\":" + String(millis() - info.receivedAtMs);
   output += ",\"raw\":[";
 
@@ -206,6 +969,8 @@ void handleLearnStatusApi() {
   doc["pulse_count"] = info.pulseCount;
   doc["duration_us"] = info.durationUs;
   doc["rssi_dbm"] = info.rssiDbm;
+  doc["frequency_mhz"] = info.frequencyMHz;
+  doc["radio_id"] = info.radioId;
   doc["age_ms"] = info.capturedAtMs > 0 ? millis() - info.capturedAtMs : 0;
   doc["persistent"] = false;
   doc["noise_floor_dbm"] = info.noiseFloorDbm;
@@ -277,7 +1042,14 @@ void handleLearnTestSendApi() {
 
 
 void handleAnalyzerApi() {
+  const uint32_t analyzerApiStartedUs = micros();
   analyzerFullApiCalls++;
+
+  uint8_t radioId = 1;
+  if (server.hasArg("radio")) {
+    radioId = static_cast<uint8_t>(server.arg("radio").toInt());
+  }
+  if (radioId != 1 && radioId != 2) radioId = 1;
   // Build a bounded snapshot and stream it directly to the client.
   // Keep the proven v1.2.0 response shape during the ESP32-S3 port.
   const bool developerMode = config.analyzerDeveloperMode;
@@ -290,9 +1062,10 @@ void handleAnalyzerApi() {
              "{\"available\":false,\"analyzer_disabled\":true,"
              "\"analyzer_developer_mode\":false,"
              "\"status\":\"Analyzer disabled - gateway remains active\","
-             "\"frequency_mhz\":%.3f,\"current_rssi_dbm\":%.1f,"
+             "\"radio_id\":%u,\"frequency_mhz\":%.3f,\"current_rssi_dbm\":%.1f,"
              "\"heap_free\":%lu,\"heap_max_block\":%lu}",
-             Radio.getFrequency(), Radio.getRSSI(),
+             static_cast<unsigned int>(radioId),
+             Radio.getOperatingFrequency(radioId), Radio.getRadioRSSI(radioId),
              static_cast<unsigned long>(ESP.getFreeHeap()),
              static_cast<unsigned long>(openrfMaxFreeBlock()));
     server.sendHeader("Cache-Control", "no-store");
@@ -300,8 +1073,8 @@ void handleAnalyzerApi() {
     return;
   }
 
-  const AnalyzerSnapshot a = analyzerGetSnapshot();
-  const AnalyzerCandidateSnapshot c = analyzerGetLastCandidate();
+  const AnalyzerSnapshot a = analyzerGetSnapshot(radioId);
+  const AnalyzerCandidateSnapshot c = analyzerGetLastCandidate(radioId);
   // Keep the proven v1.2.0 Analyzer response size for this first cleanup step.
   // Only the ESP8266 low-heap pause is removed here; buffer/response expansion
   // will be handled separately after PSRAM-aware testing.
@@ -312,9 +1085,12 @@ void handleAnalyzerApi() {
 
   JsonDocument doc;
   doc["available"] = a.available;
+  doc["radio_id"] = radioId;
   doc["sequence"] = a.sequence;
   doc["age_ms"] = a.available ? millis() - a.capturedAtMs : 0;
+  doc["processing_us"] = a.processingUs;
   doc["frequency_mhz"] = a.frequencyMHz;
+  doc["operating_frequency_mhz"] = Radio.getOperatingFrequency(radioId);
   doc["rssi_dbm"] = a.rssiDbm;
   doc["pulse_count"] = a.pulseCount;
   doc["duration_us"] = a.durationUs;
@@ -351,9 +1127,12 @@ void handleAnalyzerApi() {
   for (uint8_t i = 0; i < a.pulseClassCount; i++) classes.add(a.pulseClasses[i]);
 
   const RadioDiagnostics d = Radio.getDiagnostics();
-  doc["raw_candidates"] = d.rawCandidates;
-  doc["accepted_frames"] = d.acceptedFrames;
-  doc["rejected_frames"] = d.rejectedFrames;
+  const RadioChannelDiagnostics channelDiag =
+      Radio.getChannelDiagnostics(radioId);
+  doc["raw_candidates"] = channelDiag.rawCandidates;
+  doc["accepted_frames"] = channelDiag.acceptedFrames;
+  doc["rejected_frames"] = channelDiag.rejectedFrames;
+  // These low-level counters remain aggregate diagnostics for now.
   doc["background_filtered_frames"] = d.backgroundFilteredFrames;
   doc["ignored_glitch_edges"] = d.ignoredGlitchEdges;
   doc["gap_finalized_frames"] = d.gapFinalizedFrames;
@@ -362,7 +1141,7 @@ void handleAnalyzerApi() {
   doc["merged_same_sign_pulses"] = d.mergedSameSignPulses;
   doc["weak_rssi_frames"] = a.weakRssiFrames;
   doc["analyzer_min_rssi"] = config.analyzerMinRssi;
-  doc["current_rssi_dbm"] = Radio.getRSSI();
+  doc["current_rssi_dbm"] = Radio.getRadioRSSI(radioId);
   doc["peak_rssi_dbm"] = a.peakRssiDbm;
   doc["analyzer_min_pulse_count"] = config.analyzerMinPulseCount;
   doc["analyzer_min_duration_us"] = config.analyzerMinDurationUs;
@@ -375,12 +1154,15 @@ void handleAnalyzerApi() {
   doc["heap_free"] = freeHeap;
   doc["heap_max_block"] = maxBlock;
   doc["low_memory"] = false;
+  doc["api_build_us"] = static_cast<uint32_t>(micros() - analyzerApiStartedUs);
+  doc["server_uptime_ms"] = millis();
 
   JsonObject candidate = doc["last_candidate"].to<JsonObject>();
   candidate["available"] = c.available;
   candidate["sequence"] = c.sequence;
   candidate["age_ms"] = c.available ? millis() - c.capturedAtMs : 0;
   candidate["frequency_mhz"] = c.frequencyMHz;
+  candidate["radio_id"] = c.radioId;
   candidate["rssi_dbm"] = c.rssiDbm;
   candidate["pulse_count"] = c.pulseCount;
   candidate["duration_us"] = c.durationUs;
@@ -403,22 +1185,35 @@ void handleAnalyzerApi() {
     for (uint16_t i = 0; i < normalizedCount; i++) normalizedRaw.add(c.normalizedPulses[i]);
   }
 
+  // Step 16: build the Analyzer JSON once in memory, then send it as one
+  // normal WebServer response instead of streaming ArduinoJson directly
+  // into WiFiClient with many small writes.
   const size_t contentLength = measureJson(doc);
+  String output;
+  output.reserve(contentLength + 1);
+  serializeJson(doc, output);
   server.sendHeader("Cache-Control", "no-store");
-  server.setContentLength(contentLength);
-  server.send(200, "application/json", "");
-WiFiClient client = server.client();
-serializeJson(doc, client);
+  server.send(200, "application/json", output);
 }
 
 
 void handleAnalyzerLiveApi() {
   analyzerLiveApiCalls++;
+
+  uint8_t radioId = 1;
+  if (server.hasArg("radio")) {
+    radioId = static_cast<uint8_t>(server.arg("radio").toInt());
+  }
+  if (radioId != 1 && radioId != 2) radioId = 1;
+
   const bool developerMode = config.analyzerDeveloperMode;
-  const AnalyzerLiveState state = analyzerGetLiveState();
+  const AnalyzerLiveState state = analyzerGetLiveState(radioId);
 
   JsonDocument doc;
   doc["enabled"] = developerMode;
+  doc["radio_id"] = radioId;
+  doc["frequency_mhz"] = Radio.getOperatingFrequency(radioId);
+  doc["current_rssi_dbm"] = Radio.getRadioRSSI(radioId);
   doc["available"] = state.available;
   doc["sequence"] = state.sequence;
   doc["age_ms"] = state.available ? millis() - state.capturedAtMs : 0;
@@ -541,9 +1336,22 @@ void handleSlotsApi() {
     slotDoc["name"] = info.name;
     slotDoc["used"] = info.used;
     slotDoc["frequency_mhz"] = info.frequencyMHz;
+    slotDoc["radio_id"] = info.radioId;
+    bool tuned = false;
+    if (info.radioId == 1 || info.radioId == 2) {
+      tuned = fabsf(info.frequencyMHz - Radio.getDefaultFrequency(info.radioId)) > 0.0005F;
+    }
+    slotDoc["frequency_tuned"] = tuned;
     slotDoc["pulse_count"] = info.pulseCount;
     slotDoc["duration_us"] = info.durationUs;
     slotDoc["fingerprint"] = info.fingerprint;
+    const RawSlotMatchStats rawStats = rawSlotMatcherGetStats(i);
+    slotDoc["rx_match_count"] = rawStats.matchCount;
+    slotDoc["rx_last_similarity"] = rawStats.lastSimilarity;
+    slotDoc["rx_last_rssi"] = rawStats.lastRssi;
+    slotDoc["rx_last_age_ms"] = rawStats.lastMatchedAtMs > 0U
+                                     ? static_cast<uint32_t>(millis() - rawStats.lastMatchedAtMs)
+                                     : 0U;
 
     String chunk;
     chunk.reserve(220);
@@ -567,6 +1375,41 @@ void handleSlotsApi() {
   Serial.println(static_cast<unsigned int>(usedCount));
 }
 
+void handleSlotStatsApi() {
+  JsonDocument doc;
+  JsonArray slots = doc["slots"].to<JsonArray>();
+  for (uint8_t slot = 1U; slot <= OPENRF_SLOT_COUNT; ++slot) {
+    const RawSlotMatchStats stats = rawSlotMatcherGetStats(slot);
+    if (!stats.available) continue;
+    JsonObject item = slots.add<JsonObject>();
+    item["id"] = slot;
+    item["match_count"] = stats.matchCount;
+    item["last_similarity"] = stats.lastSimilarity;
+    item["last_rssi"] = stats.lastRssi;
+    item["last_age_ms"] = stats.lastMatchedAtMs > 0U
+                              ? static_cast<uint32_t>(millis() - stats.lastMatchedAtMs)
+                              : 0U;
+  }
+  const RawSlotMatcherDiagnostics d = rawSlotMatcherGetDiagnostics();
+  JsonObject matcher = doc["matcher"].to<JsonObject>();
+  matcher["available"] = d.available;
+  matcher["state"] = rawSlotMatchStateName(d.lastState);
+  matcher["slot"] = d.lastSlot;
+  matcher["similarity"] = d.lastSimilarity;
+  matcher["timing_similarity"] = d.lastTimingSimilarity;
+  matcher["count_similarity"] = d.lastCountSimilarity;
+  matcher["sign_agreement"] = d.lastSignAgreement;
+  matcher["compared_pulses"] = d.lastComparedPulses;
+  matcher["learned_pattern_pulses"] = d.learnedPatternPulses;
+  matcher["incoming_pattern_pulses"] = d.incomingPatternPulses;
+  matcher["learned_repeat_reduced"] = d.learnedRepeatReduced;
+  matcher["incoming_repeat_reduced"] = d.incomingRepeatReduced;
+  matcher["match_count"] = d.matchCount;
+  matcher["no_match_count"] = d.noMatchCount;
+  matcher["duplicate_suppressed_count"] = d.duplicateSuppressedCount;
+  sendJsonDoc(200, doc);
+}
+
 bool readSlotRequest(JsonDocument& doc, uint8_t& slot) {
   if (!server.hasArg("plain")) { sendJsonError(400, "Missing JSON request body"); return false; }
   if (deserializeJson(doc, server.arg("plain"))) { sendJsonError(400, "Invalid JSON request body"); return false; }
@@ -588,17 +1431,22 @@ void handleSlotSaveApi() {
   if (name.length() > OPENRF_SLOT_NAME_MAX) { sendJsonError(400, "Slot name is too long"); return; }
   const uint16_t count = Radio.copyLearnRaw(openrfScratch, OPENRF_MAX_RAW_PULSES);
   uint32_t fingerprint = 0;
-  if (!storageSaveSlot(slot, name, Radio.getFrequency(), openrfScratch, count, capture.durationUs, &fingerprint)) {
+  if (!storageSaveSlot(slot, name, capture.frequencyMHz, capture.radioId,
+                       openrfScratch, count, capture.durationUs, &fingerprint)) {
     sendJsonError(500, "Failed to save slot to LittleFS"); return;
   }
+  rawSlotMatcherReload(slot);
   JsonDocument response;
   response["success"] = true;
   response["message"] = "Signal saved to slot " + String(slot);
   response["slot"] = slot;
   response["fingerprint"] = fingerprint;
+  response["radio_id"] = capture.radioId;
+  response["frequency_mhz"] = serialized(String(capture.frequencyMHz, 4));
   String output; serializeJson(response, output); server.send(200, "application/json", output);
   if (mqttIsConnected() && config.homeAssistantDiscovery) mqttPublishDiscovery();
-  Serial.print("SLOT saved: "); Serial.print(slot); Serial.print(", "); Serial.print(count);
+  Serial.print("SLOT saved: "); Serial.print(slot); Serial.print(", R"); Serial.print(capture.radioId);
+  Serial.print(" @ "); Serial.print(capture.frequencyMHz, 4); Serial.print(" MHz, "); Serial.print(count);
   Serial.print(" pulses, fingerprint "); Serial.println(fingerprint, HEX);
 }
 
@@ -607,7 +1455,17 @@ void handleSlotSendApi() {
   if (!readSlotRequest(doc, slot)) return;
   SlotInfo info;
   if (!storageLoadSlot(slot, openrfScratch, OPENRF_MAX_RAW_PULSES, info)) { sendJsonError(404, "Slot is empty or invalid"); return; }
-  if (!rfCommandSendRaw(openrfScratch, info.pulseCount, config.replayCount)) { sendJsonError(500, "RF transmission failed"); return; }
+  // Step 27: RF Slot TX uses the slot's stored Radio + Learned frequency.
+  // The RF core retunes only for the transmission and restores the radio's
+  // current Operating frequency (including an active TUNED session) afterwards.
+  const uint8_t radioId = (info.radioId == 1 || info.radioId == 2)
+                              ? info.radioId
+                              : (info.frequencyMHz >= 700.0F ? 2 : 1);
+  if (!rfCommandSendRawTuned(openrfScratch, info.pulseCount, config.replayCount,
+                             radioId, info.frequencyMHz)) {
+    sendJsonError(500, "RF transmission failed");
+    return;
+  }
   sendSuccess("Slot " + String(slot) + " transmitted");
   Serial.print("SLOT sent: "); Serial.println(slot);
 }
@@ -626,6 +1484,7 @@ void handleSlotDeleteApi() {
   JsonDocument doc; uint8_t slot;
   if (!readSlotRequest(doc, slot)) return;
   if (!storageDeleteSlot(slot)) { sendJsonError(500, "Failed to delete slot"); return; }
+  rawSlotMatcherClear(slot);
   sendSuccess("Slot " + String(slot) + " deleted");
   if (mqttIsConnected() && config.homeAssistantDiscovery) mqttPublishDiscovery();
   Serial.print("SLOT deleted: "); Serial.println(slot);
@@ -633,14 +1492,28 @@ void handleSlotDeleteApi() {
 
 
 void handleRxSlotsApi() {
+  const ProtocolTxDiagnostics tx = protocolTxDiagnosticsSnapshot();
+  const uint32_t txAgeMs = tx.available
+                               ? static_cast<uint32_t>(millis() - tx.timestampMs)
+                               : 0U;
   server.setContentLength(CONTENT_LENGTH_UNKNOWN);
   server.send(200, "application/json", "");
-  server.sendContent("{\"count\":10,\"used_count\":" + String(rxSlotCountUsed()) +
+  server.sendContent("{\"count\":" + String(OPENRF_RX_SLOT_COUNT) + ",\"used_count\":" + String(rxSlotCountUsed()) +
                      ",\"learn_state\":\"" + String(rxSlotLearnState()) +
+                     "\",\"learn_source\":\"" + String(rxSlotLearnSource()) +
                      "\",\"learning_slot\":" + String(rxSlotLearningId()) +
                      ",\"learn_min_rssi\":" + String(config.rxSlotLearnMinRssi) +
                      ",\"weak_rejected\":" + String(rxSlotWeakLearnRejectedCount()) +
                      ",\"last_weak_rssi\":" + String(rxSlotLastWeakLearnRssi(), 1) +
+                     ",\"v2_tx_available\":" + String(tx.available ? "true" : "false") +
+                     ",\"v2_tx_protocol\":\"" + String(tx.available ? protocolDiagnosticsV2ProtocolName(tx.protocol) : "—") +
+                     "\",\"v2_tx_code\":\"" + String(tx.available ? uint64Hex(tx.code) : "—") +
+                     "\",\"v2_tx_radio\":" + String(tx.available ? tx.radioId : 0U) +
+                     ",\"v2_tx_frequency_mhz\":" + String(tx.available ? tx.frequencyMHz : 0.0F, 4) +
+                     ",\"v2_tx_result\":\"" + String(tx.available ? (tx.success ? "SUCCESS" : "FAILURE") : "N/A") +
+                     "\",\"v2_tx_repeats\":" + String(tx.available ? tx.repeatCount : 0U) +
+                     ",\"v2_tx_failure\":\"" + String(tx.available ? protocolTxFailureReasonName(tx.failureReason) : "NONE") +
+                     "\",\"v2_tx_age_ms\":" + String(txAgeMs) +
                      ",\"slots\":[");
   for (uint8_t i=1;i<=OPENRF_RX_SLOT_COUNT;i++) {
     if (i>1) server.sendContent(",");
@@ -649,6 +1522,8 @@ void handleRxSlotsApi() {
     d["protocol"]=x.protocol; d["symbol_count"]=x.symbolCount;
     d["device_id"]=x.deviceId; d["command"]=x.command; d["code"]=x.code;
     d["match_code"]=x.matchCode; d["pulse_length_us"]=x.pulseLengthUs;
+    d["radio_id"]=x.radioId; d["frequency_mhz"]=serialized(String(x.frequencyMHz, 4));
+    d["send_supported"]=x.sendSupported;
     d["match_count"]=x.matchCount; d["last_quality"]=x.lastQuality; d["last_rssi"]=x.lastRssi;
     String out; serializeJson(d,out); server.sendContent(out); yield();
   }
@@ -688,6 +1563,7 @@ void handleRxLearnRssiApi() {
 void handleRxDeleteApi(){ JsonDocument b;if(deserializeJson(b,server.arg("plain"))){sendJsonError(400,"Invalid JSON");return;} uint8_t slot=b["slot"]|0; bool ok=rxSlotDelete(slot); if(ok&&config.homeAssistantDiscovery)mqttPublishDiscovery(); JsonDocument d;d["ok"]=ok;d["message"]=ok?"RX slot deleted":"Delete failed";sendJsonDoc(ok?200:400,d);}
 void handleRxRenameApi(){ JsonDocument b;if(deserializeJson(b,server.arg("plain"))){sendJsonError(400,"Invalid JSON");return;} uint8_t slot=b["slot"]|0;String name=b["name"]|"";bool ok=rxSlotRename(slot,name);if(ok&&config.homeAssistantDiscovery)mqttPublishDiscovery();JsonDocument d;d["ok"]=ok;d["message"]=ok?"RX slot renamed":"Rename failed";sendJsonDoc(ok?200:400,d);}
 void handleRxEnableApi(){ JsonDocument b;if(deserializeJson(b,server.arg("plain"))){sendJsonError(400,"Invalid JSON");return;}uint8_t slot=b["slot"]|0;bool enabled=b["enabled"]|false;bool ok=rxSlotSetEnabled(slot,enabled);if(ok&&config.homeAssistantDiscovery)mqttPublishDiscovery();JsonDocument d;d["ok"]=ok;d["message"]=ok?(enabled?"RX slot enabled":"RX slot disabled"):"Update failed";sendJsonDoc(ok?200:400,d);}
+void handleRxSendApi(){ JsonDocument b;if(deserializeJson(b,server.arg("plain"))){sendJsonError(400,"Invalid JSON");return;}uint8_t slot=b["slot"]|0;RxSlotInfo info=rxSlotGetInfo(slot);if(!info.used){sendJsonError(404,"RX slot is empty or invalid");return;}if(!info.sendSupported){sendJsonError(409,"This RX slot protocol cannot be reproduced yet");return;}if(!rxSlotSend(slot,config.replayCount)){sendJsonError(500,"RX slot transmission failed");return;}JsonDocument d;d["ok"]=true;d["message"]=String("RX Slot ")+String(slot)+" transmitted";sendJsonDoc(200,d);}
 
 void handleGetConfigApi() {
   server.send(200, "application/json", configToJson());
@@ -747,13 +1623,8 @@ void handlePostConfigApi() {
   mqttUser.trim();
 
   uint32_t replayCount = doc["replay_count"] | 1;
-  const uint16_t radioFrequencyMhz = doc["radio_frequency_mhz"] | 433;
   if (replayCount < 1 || replayCount > 10) {
     sendJsonError(400, "Replay count must be between 1 and 10");
-    return;
-  }
-  if (radioFrequencyMhz != 433 && radioFrequencyMhz != 868) {
-    sendJsonError(400, "Radio frequency must be 433 or 868 MHz");
     return;
   }
 
@@ -769,7 +1640,6 @@ void handlePostConfigApi() {
   config.mqttUser = mqttUser;
   config.homeAssistantDiscovery = doc["home_assistant_discovery"] | true;
   config.replayCount = static_cast<uint8_t>(replayCount);
-  config.radioFrequencyMhz = radioFrequencyMhz;
 
   // Empty password means: keep the currently saved password.
   if (doc["mqtt_password"].is<const char*>()) {
@@ -937,7 +1807,11 @@ void webBegin() {
   });
 
   server.on("/api/status", HTTP_GET, handleStatusApi);
+  server.on("/api/system/radios", HTTP_POST, handleRadioEnableApi);
   server.on("/api/radio", HTTP_GET, handleRadioApi);
+  server.on("/api/radio/frequency-scan", HTTP_GET, handleFrequencyScanApi);
+  server.on("/api/radio/frequency-tune", HTTP_POST, handleFrequencyTuneApi);
+  server.on("/api/radio/frequency-restore", HTTP_POST, handleFrequencyRestoreApi);
   server.on("/api/radio/raw", HTTP_GET, handleRadioRawApi);
   server.on("/api/radio/learn", HTTP_GET, handleLearnStatusApi);
   server.on("/api/radio/learn/raw", HTTP_GET, handleLearnRawApi);
@@ -950,6 +1824,7 @@ void webBegin() {
   server.on("/api/analyzer/live", HTTP_GET, handleAnalyzerLiveApi);
   server.on("/api/analyzer/settings", HTTP_POST, handleAnalyzerSettingsApi);
   server.on("/api/slots", HTTP_GET, handleSlotsApi);
+  server.on("/api/slots/stats", HTTP_GET, handleSlotStatsApi);
   server.on("/api/slots/save", HTTP_POST, handleSlotSaveApi);
   server.on("/api/slots/send", HTTP_POST, handleSlotSendApi);
   server.on("/api/slots/rename", HTTP_POST, handleSlotRenameApi);
@@ -960,6 +1835,7 @@ void webBegin() {
   server.on("/api/rxslots/delete", HTTP_POST, handleRxDeleteApi);
   server.on("/api/rxslots/rename", HTTP_POST, handleRxRenameApi);
   server.on("/api/rxslots/enable", HTTP_POST, handleRxEnableApi);
+  server.on("/api/rxslots/send", HTTP_POST, handleRxSendApi);
   server.on("/api/config", HTTP_GET, handleGetConfigApi);
   server.on("/api/config", HTTP_POST, handlePostConfigApi);
   server.on("/api/system/backup", HTTP_GET, handleBackupDownload);

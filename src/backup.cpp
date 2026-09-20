@@ -4,6 +4,7 @@
 
 #include "backup.h"
 #include "storage.h"
+#include "rxslots.h"
 
 namespace {
 constexpr char BACKUP_MAGIC[8] = {'O','R','F','B','K','P','1','\0'};
@@ -44,7 +45,7 @@ bool allowedPath(const String& path) {
   if (path == "/config.json") return true;
   if (path.startsWith("/rxslot") && path.endsWith(".bin")) {
     const int n = path.substring(7, path.length() - 4).toInt();
-    return n >= 1 && n <= 10 && path == rxSlotPath(static_cast<uint8_t>(n));
+    return n >= 1 && n <= OPENRF_RX_SLOT_COUNT && path == rxSlotPath(static_cast<uint8_t>(n));
   }
   if (!path.startsWith("/slots/slot") || !path.endsWith(".bin")) return false;
   const int begin = String("/slots/slot").length();
@@ -136,7 +137,7 @@ void removeRestoreTemps() {
     String temp = restorePathFor(slotPath(slot));
     if (LittleFS.exists(temp)) LittleFS.remove(temp);
   }
-  for (uint8_t slot = 1; slot <= 10; slot++) {
+  for (uint8_t slot = 1; slot <= OPENRF_RX_SLOT_COUNT; slot++) {
     String temp = restorePathFor(rxSlotPath(slot));
     if (LittleFS.exists(temp)) LittleFS.remove(temp);
   }
@@ -151,7 +152,7 @@ bool validateBackup(File& file, BackupHeader& header, String& error) {
     error = "Unsupported or invalid OpenRF backup file";
     return false;
   }
-  if (header.fileCount == 0 || header.fileCount > OPENRF_SLOT_COUNT + 10 + 1) {
+  if (header.fileCount == 0 || header.fileCount > OPENRF_SLOT_COUNT + OPENRF_RX_SLOT_COUNT + 1) {
     error = "Invalid backup file count";
     return false;
   }
@@ -203,7 +204,7 @@ size_t backupCalculateSize(uint16_t& fileCount) {
     total += recordSize(path);
     fileCount++;
   }
-  for (uint8_t slot = 1; slot <= 10; slot++) {
+  for (uint8_t slot = 1; slot <= OPENRF_RX_SLOT_COUNT; slot++) {
     const String path = rxSlotPath(slot);
     if (!includePath(path)) continue;
     total += recordSize(path);
@@ -234,7 +235,7 @@ bool backupStreamToClient(WiFiClient& client, String& error) {
     const String path = slotPath(slot);
     if (includePath(path) && !streamRecord(client, path, error)) return false;
   }
-  for (uint8_t slot = 1; slot <= 10; slot++) { const String p = rxSlotPath(slot); if (includePath(p) && !streamRecord(client, p, error)) return false; }
+  for (uint8_t slot = 1; slot <= OPENRF_RX_SLOT_COUNT; slot++) { const String p = rxSlotPath(slot); if (includePath(p) && !streamRecord(client, p, error)) return false; }
   return true;
 }
 
@@ -306,11 +307,11 @@ bool backupRestoreFromFile(const char* uploadPath, String& error) {
       removeRestoreTemps(); return false;
     }
   }
-  for (uint8_t slot = 1; slot <= 10; slot++) {
+  for (uint8_t slot = 1; slot <= OPENRF_RX_SLOT_COUNT; slot++) {
     const String finalPath = rxSlotPath(slot);
     if (LittleFS.exists(finalPath)) LittleFS.remove(finalPath);
   }
-  for (uint8_t slot = 1; slot <= 10; slot++) {
+  for (uint8_t slot = 1; slot <= OPENRF_RX_SLOT_COUNT; slot++) {
     const String finalPath = rxSlotPath(slot);
     const String tempPath = restorePathFor(finalPath);
     if (LittleFS.exists(tempPath) && !LittleFS.rename(tempPath, finalPath)) {

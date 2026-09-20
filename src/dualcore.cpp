@@ -10,6 +10,7 @@
 #include "rxslots.h"
 #include "web.h"
 #include "platform_compat.h"
+#include "raw_slot_matcher.h"
 
 namespace {
 constexpr uint32_t SYSTEM_TASK_STACK = 16384;
@@ -59,8 +60,19 @@ void systemTask(void* parameter) {
     uint8_t eventsThisPass = 0;
     while (eventsThisPass < 8 &&
            xQueueReceive(rfEventQueue, &event, 0) == pdTRUE) {
+      // Raw telemetry remains available for every accepted RX frame. Step 39.2
+      // routes protocol actions exclusively through V2ActionPayload; the
+      // legacy RX protocol action fallback is retired.
       rxSlotsHandleRFEvent(event);
+      if (event.v2Action.available) rxSlotsHandleV2Action(event);
+      // Step 40: Learned RAW is strictly the post-protocol fallback. The RF
+      // core marks only V2 UNKNOWN captures as eligible, so known protocol
+      // duplicates and AMBIGUOUS captures cannot generate RAW-slot actions.
+      rawSlotMatcherHandleRFEvent(event);
+
       mqttHandleRFEvent(event);
+      if (event.v2Action.available) mqttHandleV2Action(event);
+
       eventProcessed++;
       eventsThisPass++;
     }
@@ -116,13 +128,19 @@ void radioTask(void* parameter) {
         case RFCommandType::DISCARD_LEARN:  ok = Radio.discardLearnCapture(); break;
         case RFCommandType::TEST_LEARN_TX:  ok = Radio.testSendLearnCapture(command.repeats); break;
         case RFCommandType::SEND_RAW:
-          ok = Radio.sendRaw(command.pulses, command.pulseCount, command.repeats);
+          ok = Radio.sendRaw(command.pulses, command.pulseCount, command.repeats,
+                             command.frequencyMhz);
+          break;
+        case RFCommandType::SEND_RAW_TUNED:
+          ok = Radio.sendRawTuned(command.pulses, command.pulseCount, command.repeats,
+                                  command.radioId, command.frequencyMhz);
           break;
         case RFCommandType::START_RECEIVE:  ok = Radio.startReceive(); break;
         case RFCommandType::STOP_RECEIVE:   ok = Radio.stopReceive(); break;
         default: break;
       }
       if (command.type == RFCommandType::SEND_RAW ||
+          command.type == RFCommandType::SEND_RAW_TUNED ||
           command.type == RFCommandType::TEST_LEARN_TX) {
         rfEventPublishStatus(RFEventType::TX_COMPLETE, ok,
                              ok ? 0 : Radio.getLastError());
@@ -246,12 +264,32 @@ bool rfCommandTestLearnTx(uint8_t repeats) {
   RFCommandMessage c; c.type = RFCommandType::TEST_LEARN_TX; c.repeats = repeats;
   return executeRFCommand(c);
 }
-bool rfCommandSendRaw(const int16_t* pulses, uint16_t pulseCount, uint8_t repeats) {
+bool rfCommandSendRaw(const int16_t* pulses, uint16_t pulseCount,
+                      uint8_t repeats, float frequencyMhz) {
   if (!pulses || pulseCount == 0 || pulseCount > OPENRF_MAX_RAW_PULSES) return false;
-  RFCommandMessage c; c.type = RFCommandType::SEND_RAW; c.repeats = repeats; c.pulseCount = pulseCount;
+  RFCommandMessage c;
+  c.type = RFCommandType::SEND_RAW;
+  c.repeats = repeats;
+  c.pulseCount = pulseCount;
+  c.frequencyMhz = frequencyMhz;
   memcpy(c.pulses, pulses, pulseCount * sizeof(int16_t));
   return executeRFCommand(c);
 }
+bool rfCommandSendRawTuned(const int16_t* pulses, uint16_t pulseCount,
+                           uint8_t repeats, uint8_t radioId,
+                           float frequencyMhz) {
+  if (!pulses || pulseCount == 0 || pulseCount > OPENRF_MAX_RAW_PULSES ||
+      (radioId != 1 && radioId != 2)) return false;
+  RFCommandMessage c;
+  c.type = RFCommandType::SEND_RAW_TUNED;
+  c.repeats = repeats;
+  c.pulseCount = pulseCount;
+  c.frequencyMhz = frequencyMhz;
+  c.radioId = radioId;
+  memcpy(c.pulses, pulses, pulseCount * sizeof(int16_t));
+  return executeRFCommand(c);
+}
+
 bool rfCommandStartReceive() {
   RFCommandMessage c; c.type = RFCommandType::START_RECEIVE;
   return executeRFCommand(c);
@@ -265,7 +303,12 @@ bool rfCommandStopReceive() {
 bool rfEventPublishFrame(RFEventType type, uint32_t sequence,
                          const int16_t* pulses, uint16_t pulseCount,
                          uint32_t durationUs, float rssiDbm,
-                         float frequencyMhz, uint32_t timestampMs) {
+                         float frequencyMhz, uint8_t radioId,
+                         uint32_t timestampMs,
+                         bool legacyProtocolActionAllowed,
+                         const V2ActionPayload* v2Action,
+                         const V2LearnPayload* v2Learn,
+                         bool rawMatchEligible) {
   if (!rfEventQueue || !pulses || pulseCount == 0 ||
       pulseCount > OPENRF_MAX_RAW_PULSES) {
     return false;
@@ -278,7 +321,12 @@ bool rfEventPublishFrame(RFEventType type, uint32_t sequence,
   event.durationUs = durationUs;
   event.rssiDbm = rssiDbm;
   event.frequencyMhz = frequencyMhz;
+  event.radioId = radioId;
   event.timestampMs = timestampMs;
+  event.legacyProtocolActionAllowed = legacyProtocolActionAllowed;
+  event.rawMatchEligible = rawMatchEligible;
+  if (v2Action != nullptr) event.v2Action = *v2Action;
+  if (v2Learn != nullptr) event.v2Learn = *v2Learn;
   memcpy(event.pulses, pulses, pulseCount * sizeof(int16_t));
 
   if (xQueueSend(rfEventQueue, &event, 0) != pdTRUE) {

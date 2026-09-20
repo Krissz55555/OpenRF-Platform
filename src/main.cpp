@@ -12,6 +12,10 @@
 #include "psram_buffers.h"
 #include "analyzer.h"
 #include "scratch.h"
+#include "status_led.h"
+#include "hardware_status.h"
+#include "protocol_engine.h"
+#include "raw_slot_matcher.h"
 
 namespace {
 bool delayedMemoryReportPrinted = false;
@@ -34,6 +38,9 @@ void printMemoryDiagnostics() {
 }
 
 void setup() {
+  // Always show a visible boot/restart indication before normal startup.
+  statusLedBootSequence();
+
   Serial.begin(115200);
   bootStartedAtMs = millis();
   delay(1000);
@@ -77,10 +84,29 @@ void setup() {
   }
 
   configBegin();
+
+  if (!protocolEngineBegin()) {
+    Serial.println(F("WARNING: V2 Protocol Engine initialization failed"));
+  }
+
+  // Deselect both shared-SPI CC1101 devices before Radio 1 initialization.
+  // This prevents the second module from contending on MISO/CS during boot.
+  hardwareStatusPrepareBus();
+
   wifiBegin();
-  Radio.begin();
+
+  if (config.radio1Enabled || config.radio2Enabled) {
+    Radio.begin();
+  } else {
+    Serial.println(F("Both CC1101 radios are disabled in System"));
+  }
+
+  hardwareStatusBegin();
   mqttBegin();
   rxSlotsBegin();
+  if (!rawSlotMatcherBegin()) {
+    Serial.println(F("WARNING: Bidirectional RAW matcher initialization failed"));
+  }
   webBegin();
 
   Serial.print(F("Free heap after startup: "));

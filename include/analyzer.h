@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include "protocol_engine.h"
 #include "universal_decoder.h"
 
 constexpr uint16_t OPENRF_ANALYZER_RAW_PREVIEW = 192;
@@ -21,7 +22,9 @@ struct AnalyzerCandidateSnapshot {
   bool available = false;
   uint32_t sequence = 0;
   uint32_t capturedAtMs = 0;
+  uint32_t processingUs = 0;
   float frequencyMHz = 0.0F;
+  uint8_t radioId = 0;
   float rssiDbm = -127.0F;
   uint16_t pulseCount = 0;
   uint32_t durationUs = 0;
@@ -41,7 +44,9 @@ struct AnalyzerSnapshot {
   bool available = false;
   uint32_t sequence = 0;
   uint32_t capturedAtMs = 0;
+  uint32_t processingUs = 0;
   float frequencyMHz = 0.0F;
+  uint8_t radioId = 0;
   float rssiDbm = -127.0F;
   uint16_t pulseCount = 0;
   uint32_t durationUs = 0;
@@ -78,20 +83,21 @@ struct AnalyzerSnapshot {
 
 void analyzerReset();
 void analyzerRecordCandidate(const int16_t* pulses, uint16_t count, uint32_t durationUs,
-                             float frequencyMHz, float rssiDbm,
+                             float frequencyMHz, uint8_t radioId, float rssiDbm,
                              const String& rejectReason);
-AnalyzerCandidateSnapshot analyzerGetLastCandidate();
+AnalyzerCandidateSnapshot analyzerGetLastCandidate(uint8_t radioId = 1);
 void analyzerProcess(const int16_t* pulses, uint16_t count, uint32_t durationUs,
-                     float frequencyMHz, float rssiDbm, bool accepted,
-                     const String& rejectReason);
+                     float frequencyMHz, uint8_t radioId, float rssiDbm, bool accepted,
+                     const String& rejectReason,
+                     const ProtocolEngineObservation* v2Observation = nullptr);
 bool analyzerConsiderRejected(const int16_t* pulses, uint16_t count, uint32_t durationUs,
-                              float frequencyMHz, float rssiDbm,
+                              float frequencyMHz, uint8_t radioId, float rssiDbm,
                               const String& rejectReason);
-AnalyzerSnapshot analyzerGetSnapshot();
-bool analyzerRssiPasses(float rssiDbm);
-void analyzerRecordWeakRssi(float rssiDbm);
+AnalyzerSnapshot analyzerGetSnapshot(uint8_t radioId = 1);
+bool analyzerRssiPasses(uint8_t radioId, float rssiDbm);
+void analyzerRecordWeakRssi(uint8_t radioId, float rssiDbm);
 
-AnalyzerLiveState analyzerGetLiveState();
+AnalyzerLiveState analyzerGetLiveState(uint8_t radioId = 1);
 
 bool analyzerBegin();
 size_t analyzerPsramAllocatedBytes();

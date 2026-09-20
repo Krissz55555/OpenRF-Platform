@@ -1,524 +1,383 @@
 # OpenRF Platform
 
-**Open-source RF gateway and protocol-development platform for ESP32-S3 + CC1101.**
-
-RF Gateway • RF Analyzer • Kinetic RF • MQTT • Home Assistant • REST API • OTA • 433 / 868 MHz
+**Open-source RF gateway and signal-analysis platform for ESP32-S3, dual CC1101 radios, and local Home Assistant integration.**
 
----
+**Current release: v2.0.0-beta.2**
 
-## Current release
+> OpenRF Platform v2.0.0-beta.2 goes beyond the ESP32-S3 migration delivered in beta.1. It establishes the RF capture, normalization, protocol-decision, diagnostics, and learned-signal infrastructure needed for the future **Deep Analyzer**.
 
-**OpenRF Platform v2.0.0-beta.1 – ESP32-S3**
+The Deep Analyzer aims to make unknown remotes easier to capture, compare, understand, and integrate into local automations. Fully automatic protocol recognition and integration are **not yet implemented**. This beta provides the underlying radio engine and learning workflow on which those capabilities can be built.
 
-This is the first public beta of the ESP32-S3 generation of OpenRF Platform.
+A major practical addition is **bidirectional RAW operation**: saved RAW signals can be transmitted from Home Assistant, while learned unknown RAW remotes can trigger Home Assistant automations.
 
-The ESP32-S3 version is based on the proven v1.2.0 ESP8266 feature set, but removes the main hardware limitations of the original platform through dual-core operation, additional memory and PSRAM-aware buffering.
+## Release status and highlights
 
-The ESP8266 implementation remains available in the **`esp8266`** branch and its final stable release remains **v1.2.0**.
+v2.0.0-beta.2 is the second public beta of the ESP32-S3 generation. While beta.1 established the ESP32-S3 N16R8 platform, beta.2 delivers the dual-radio V2 RF architecture, modular Protocol Engine, bidirectional RAW workflow, expanded diagnostics, and Deep Analyzer foundations. ESP32-S3 is the active development platform; the ESP8266 implementation remains available separately as a legacy release.
 
-> The ESP32-S3 port is now the default branch and the active development platform.
+The main improvements are:
 
----
+- **Dual-radio operation:** two CC1101 transceivers with dedicated 433 MHz and 868 MHz paths, simultaneous reception, and independent diagnostics. 
+- **V2 Protocol Engine:** modular decoding with explicit `KNOWN`, `UNKNOWN`, and `AMBIGUOUS` decisions. 
+- **Bidirectional RAW slots:** learn, save, replay, and recognize repeatable unknown signals. 
+- **Local automation:** MQTT and Home Assistant Discovery for transmission controls and receive events. 
+- **Non-exclusive RF Analyzer:** inspect traffic while normal gateway services continue running. 
+- **ESP32-S3 architecture:** separate system and radio tasks, PSRAM-backed working buffers, and detailed load and memory diagnostics. 
+- **Updated WebUI:** live radio status, responsive navigation, system management, OTA updates, and backup/restore. 
 
-## Key technologies
+This remains a beta. Compatibility and recognition reliability depend on the remote, RF environment, radio configuration, and capture quality. Validate intended automations with your own hardware.
 
-* ESP32-S3 N16R8
-* 16 MB Flash
-* 8 MB PSRAM
-* CC1101 RF transceiver
-* RadioLib
-* PlatformIO
-* LittleFS
-* FreeRTOS dual-core tasks
-* MQTT
-* Home Assistant Discovery
-* REST / JSON API
-* OTA firmware updates
+## Foundations for the Deep Analyzer
 
----
+Deeper RF analysis requires consistent capture data and a clear separation between observation, classification, and action. This release provides those foundations.
 
-## Major features
+| Foundation | Available in this beta |
+| --- | --- |
+| Processing and memory            | ESP32-S3 N16R8 with 16 MB flash, 8 MB PSRAM, and dual-core FreeRTOS task separation          |
+| Radio input                      | Two CC1101 transceivers with dedicated 433 MHz and 868 MHz RF paths                           |
+| Capture model                    | Unified RAW capture data retaining radio source, frequency, and RSSI                         |
+| Signal processing                | Frame finalization, RAW normalization, repeated-burst recognition, and repeat reduction      |
+| Protocol decisions               | V2-only modular engine with `KNOWN`, `UNKNOWN`, and `AMBIGUOUS` results                      |
+| Event handling                   | Normalized protocol events, Learned RAW matching, and duplicate-event suppression            |
+| Observability                    | Per-radio capture diagnostics, decoder decisions, routing information, and memory monitoring |
 
-### RF Gateway
+Together, these make captures easier to compare consistently and provide room for larger analysis workloads. Multi-capture interpretation and automatic receiver optimization remain planned extensions.
 
-* CC1101 OOK/RAW reception and transmission
-* 30 persistent RAW TX slots
-* RAW Learn, preview, accept, save and replay
-* Universal protocol-aware RX Slots
-* Adjustable RX Slot Learn RSSI filtering
-* Repeat lockout and automation-safe event handling
-* 433.920 MHz or 868.350 MHz operating-band selection
+## Dual-radio RF architecture
 
-### Native protocol framework
+OpenRF uses two dedicated CC1101 radio paths rather than switching one radio between bands.
 
-* Modular Protocol Manager
-* Classic decoder branch
-* Kinetic decoder branch
-* EV1527 / HS1527 / Princeton
-* PT2262 / PT2272-style tri-state signals
-* NVKP01 Kinetic support
+| Radio | Default frequency | Role |
+| --- | --- | --- |
+| Radio 1                    | 433.920 MHz | Dedicated 433 MHz RF path |
+| Radio 2                    | 868.350 MHz | Dedicated 868 MHz RF path |
 
-### Kinetic RF support
+When both radios are installed and enabled, they can receive simultaneously. Each radio has its own operating state, RF profile, counters, and diagnostics. Captures and resulting events retain their radio source.
 
-* NVKP01 protocol recognition
-* Stable Kinetic `PRESS` event generation
-* RX Slot learning
-* MQTT event publication
-* Home Assistant Discovery and automation triggers
-* Recognition separated from actionable decoding
-* Multi-stage confirmation to reduce false positives in noisy RF environments
+The Dashboard displays each radio’s current state, including `Active` or `Disabled`, and operating frequency. System controls manage installed modules and radio enablement.
 
-### MQTT and Home Assistant
+> **Hardware matters:** setting a frequency in software does not retune the antenna or RF matching network. Use a CC1101 module and antenna suitable for each operating band.
 
-* Configurable MQTT broker and base topic
-* Home Assistant Discovery
-* TX controls
-* RX binary sensors
-* Device automation triggers
-* Stable identifiers
-* Event payloads with protocol, device, control, action, quality and RSSI data
+## V2 Protocol Engine
 
-### Web interface
+The receive decision path is fully V2-based. Modular decoders evaluate the full RAW capture before the engine decides whether it represents a supported protocol.
 
-* Dashboard
-* RF Learn
-* RF Slots
-* RX Slots
-* RF Analyzer
-* Settings
-* System diagnostics
-* About
-* OTA Update
-* Backup and Restore
+### Supported protocol families
 
-### System functions
+| Protocol family | Native RX | Native protocol TX |
+| --- | --- | --- |
+| EV1527 / HS1527 / Princeton                | Supported | Supported |
+| PT2262 / PT2272-style Tri-State            | Supported | Supported |
+| HT12E                                      | Supported | Supported |
+| NVKP01 Kinetic                             | Supported | RX-only   |
 
-* Wi-Fi Station mode
-* First-start Access Point configuration
-* LittleFS persistent storage
-* REST / JSON API
-* OTA firmware update
-* Configuration and slot backup/restore
-* Flash, PSRAM and internal heap diagnostics
-* Core 0 / Core 1 live load monitoring
+Support applies to compatible signal formats and timing variants, not every product sold under a protocol-family name. Native transmission uses the modular V2 TX interface; RAW replay is a separate capability.
 
----
+### Classification and routing
 
-## OpenRF Platform v2 – Development direction
+| Decision | Result |
+| --- | --- |
+| `KNOWN`        | A confident, unambiguous protocol result can enter the normalized protocol-event path. |
+| `UNKNOWN`      | An eligible capture can be compared with saved signals by the Learned RAW matcher.     |
+| `AMBIGUOUS`    | No automatic action is taken.                                                          |
 
-With the ESP32-S3 port complete, development is moving beyond simply reproducing the ESP8266 feature set on faster hardware.
+A rejected or uncertain capture is not promoted to a known protocol simply to improve recognition rates. False protocol matches are especially harmful because they prevent otherwise unknown signals from reaching the RAW matching path.
 
-The primary direction for **OpenRF Platform v2** is to evolve from an RF gateway into a more autonomous **Sub-GHz signal analysis platform**.
+NVKP01 recognition remains conservative. Its normalized button event should not be interpreted as proof of distinct `PRESS` and `RELEASE` semantics or a globally unique transmitter identity.
 
-The goal is for OpenRF to progressively reduce the amount of RF knowledge required from the user:
+## Bidirectional RAW Learn and Home Assistant control
 
-> **Press the remote. Let OpenRF find the signal, analyze it, optimize reception, and try to make it usable in Home Assistant.**
+RAW learning records pulse sequences without requiring a native protocol decoder or encoder. Saved RF Slots support both replay and matching of later eligible receptions.
 
-### Next stage – Dual CC1101 / 433 + 868 MHz
+### Home Assistant → OpenRF → RF transmission
 
-The next major hardware step is support for a **second CC1101**, allowing dedicated 433 MHz and 868 MHz radios.
+1.  Capture a remote signal in **RF Learn**. 
+2.  Inspect the preview and accept it into temporary memory. 
+3.  Save it to a persistent **RF Slot**. 
+4.  Replay the saved signal from the WebUI, MQTT, or Home Assistant. 
 
-Rather than treating them as two independent RF systems, both radios will feed a common RF engine and a unified capture format.
+This allows compatible devices to be controlled even when OpenRF does not yet have a native protocol encoder for them.
 
-This architecture is intended to provide the foundation for automatic radio selection, signal scanning and deeper RF analysis.
+Accepting a preview is **not** the same as saving a slot. The signal becomes persistent only after it is saved.
 
-### Deep Analyzer
+### Unknown RF remote → OpenRF → Home Assistant
 
-The **Deep Analyzer** is the main planned feature direction for OpenRF Platform v2.
+1.  Learn and save a suitable RAW signal. 
+2.  On a later reception, the V2 Protocol Engine evaluates the capture. 
+3.  If the result is `UNKNOWN` and eligible for matching, the Learned RAW matcher compares it with saved signals. 
+4.  A successful match can produce an RX event, published through MQTT and exposed through Home Assistant Discovery. 
 
-Instead of only displaying captured RF data, it is intended to compare multiple captures and derive useful information from them.
+Depending on the supported entity or discovery configuration, these receptions can be used as automation triggers or binary sensor events.
 
-Planned analysis includes:
+The matcher compares normalized timing and waveform structure. Repeat reduction helps compare captures containing different numbers of repeated frames, while duplicate suppression limits repeated publication of the same logical event.
 
-* frequency and RSSI characteristics
-* noise level
-* pulse-width distribution and timing
-* estimated bit timing
-* frame length and frame gaps
-* repeated-frame detection
-* preamble and synchronization patterns
-* static and changing payload regions
-* capture similarity and consistency
-* modulation estimation
-* static-code detection
-* potential rolling/dynamic-code detection
+RF Slots expose match counters, similarity, RSSI, and TX/RX capability so matching behavior can be inspected.
 
-### Automatic CC1101 optimization
+> RAW learning requires a sufficiently stable, repeatable waveform. Unknown does not mean universally learnable: rolling codes, changing payloads, security mechanisms, and inconsistent captures can prevent reliable matching or useful replay.
 
-A later stage of the Deep Analyzer is planned to automatically test and compare different CC1101 receiver configurations.
+## RF Slots and RX Slots
 
-This may include parameters such as:
+The two slot types serve different purposes.
 
-* RX bandwidth
-* data rate
-* frequency deviation
-* modulation
-* synchronization settings
-* other relevant CC1101 radio parameters
+| Slot type | Stores | Intended use |
+| --- | --- | --- |
+| **RF Slots**                | Learned RAW pulse sequences        | RAW replay and receive matching for eligible `UNKNOWN` signals |
+| **RX Slots**                | Normalized known-protocol identity | Receive events from supported V2 protocols                     |
 
-OpenRF could then compare capture quality across configurations and recommend or automatically select the best-performing RF profile.
+OpenRF provides **30 persistent RAW RF Slots**. Saved waveforms are retained for transmission, while matching uses normalized comparisons.
 
-### Target workflow
+RX Slots avoid depending on exact RAW timing equality. They identify receptions through the fields supplied by the relevant protocol module, such as protocol and code. Available identity detail varies by protocol.
 
-The intended long-term workflow is:
+RX Slot learning includes an adjustable signal-strength filter. Native TX is available only where the protocol module supports it; NVKP01 remains RX-only.
 
-```text
-SCAN
-  ↓
-DETECT
-  ↓
-ANALYZE
-  ↓
-OPTIMIZE
-  ↓
-VERIFY
-  ↓
-TEST
-  ↓
-SAVE
-  ↓
-HOME ASSISTANT
-```
+## RF Analyzer and diagnostics
 
-The technical complexity should remain inside OpenRF rather than being pushed onto the user.
+On ESP32-S3, the RF Analyzer is **non-exclusive**. RX Slots, MQTT, Home Assistant, and normal gateway processing continue operating while analysis is enabled.
 
-### Development priority
+The Analyzer supports both radios and provides:
 
-1. Second CC1101 / dedicated 868 MHz radio
-2. Unified RF capture layer
-3. Dual-radio RF engine
-4. Deep Analyzer foundation
-5. Multi-capture comparison
-6. Modulation and timing analysis
-7. CC1101 Auto Tune
-8. Analyze → Save → Home Assistant workflow
+-  RAW candidates, accepted captures, and structured rejected captures. 
+-  Clear rejection reasons, including `RSSI FILTERED`. 
+-  Pulse count, duration, RSSI, and pulse-width statistics. 
+-  Estimated pulse classes, base timing, and timing ratios. 
+-  Polarity alternation, same-sign pairs, and run-length diagnostics. 
+-  Normalized signed RAW output and copyable reports. 
+-  Known-protocol recognition and unknown-signal inspection. 
+-  Candidate freezing for examining a capture without live replacement. 
+-  Advanced sensitivity, similarity, and occurrence controls. 
 
-LoRa/SX1276, community RF profile sharing, cloud functionality and other radio technologies remain possible future directions, but they are **not the current development priority**.
+The Diagnostics page adds frame-finalization information, Protocol Engine decisions, decoder rejection details, V2 routing, Learned RAW matching, protocol TX status, and queue/core/memory information.
 
----
+The latest RAW candidate and latest completed Analyzer result are separate snapshots. Check their identifiers and timestamps before assuming they describe the same reception. Analyzer presentation also does not replace the authoritative V2 routing decision.
 
-## ESP32-S3 architecture
+The current RF Analyzer is distinct from the planned Deep Analyzer.
 
-The ESP32-S3 port uses a FreeRTOS task-based dual-core architecture.
+## MQTT, Home Assistant, and REST API
 
-### Core 0 – System
+OpenRF publishes state and receive events under a configurable MQTT base topic. Home Assistant Discovery exposes supported transmission controls, receive entities, and device automation triggers.
 
-* Wi-Fi
-* WebUI
-* REST API
-* MQTT
-* Home Assistant
-* OTA
-* LittleFS
-* configuration and system services
+Integration supports:
 
-### Core 1 – Radio Engine
+-  Saved RAW transmissions initiated from Home Assistant. 
+-  Known-protocol RX Slot events. 
+-  Learned unknown RAW remote events. 
+-  Stable slot/entity identifiers. 
+-  Available protocol, code, radio, quality, and RSSI metadata. 
 
-* CC1101
-* RF RX
-* RF TX
-* Learn
-* RAW capture
-* protocol decode
-* Kinetic RF
-* RF Analyzer
+Payload details depend on the event type and protocol. A RAW match identifies a saved waveform; it does not establish that the underlying protocol has been decoded.
 
-Communication between the two domains is queue-based:
+The WebUI uses the same REST/JSON API available to integrations. API groups cover system health, radio state, settings, learning, RF Slots, RX Slots, analysis, OTA, and backup/restore.
 
-```text
-Core 0
-  ↓
-rfCommandQueue
-  ↓
-Core 1
+## Web interface
 
-Core 1
-  ↓
-rfEventQueue
-  ↓
-Core 0
-```
+The responsive WebUI separates daily operation from detailed diagnostics.
 
-This keeps normal network activity from directly blocking the time-sensitive radio engine.
+| Page | Purpose |
+| --- | --- |
+| Dashboard   | Firmware, network and MQTT status, radios, latest RF reception, and uptime            |
+| RF Learn    | Capture, preview, temporarily accept, and save RAW signals                            |
+| RF Slots    | Replay saved signals and inspect RAW receive matching                                 |
+| RX Slots    | Learn and manage normalized known-protocol events                                     |
+| RF Analyzer | Inspect captures, timing, protocol results, and RAW reports                           |
+| Settings    | Configure gateway and integration settings                                            |
+| System      | Memory, installed modules, radio enablement, RF tuning, updates, and backups          |
+| Diagnostics | Capture, decoder, routing, matcher, TX, queue, and runtime details                    |
+| About       | Platform and release information                                                      |
 
----
+Live indicators expose Core 0, Core 1, PSRAM, and heap usage. Navigation supports desktop layouts and horizontal scrolling on smaller screens.
 
-## RF Analyzer
+## ESP32-S3 architecture and memory
 
-On ESP32-S3, the RF Analyzer is **non-exclusive**.
+OpenRF uses RadioLib, PlatformIO, LittleFS, and a dual-core FreeRTOS architecture.
 
-The Analyzer can run at the same time as RX Slots, MQTT, Home Assistant, gateway operation and RF event forwarding.
+| Domain | Main responsibilities |
+| --- | --- |
+| **Core 0 — System**         | Wi-Fi, WebUI, REST API, MQTT, Home Assistant integration, OTA, configuration, and filesystem services |
+| **Core 1 — Radio**          | CC1101 operation, RX/TX, learning, RAW capture, protocol processing, and RF analysis                  |
 
-The ESP8266-era Gateway Mode / Exclusive Analyzer restriction does **not** apply to the ESP32-S3 version.
+Commands pass to the radio domain through `rfCommandQueue`; events return through `rfEventQueue`. This separation reduces direct interference between normal network activity and time-sensitive radio processing.
 
-The Analyzer provides:
+### Memory allocation
 
-* Adjustable RSSI threshold
-* Candidate capture and freeze
-* Pulse count, duration and RSSI
-* Pulse min / average / max
-* Pulse-class estimation
-* Base-pulse and class-ratio diagnostics
-* Alternation analysis
-* Same-sign pair count
-* Longest same-sign run
-* RAW normalization
-* Structured Unknown detection
-* Similarity and occurrence clustering
-* Reject-reason diagnostics
-* Known-protocol recognition
-* Copyable RAW output for decoder development
+The ESP32-S3 N16R8 target provides **16 MB flash** and **8 MB PSRAM**.
 
-The WebUI uses a lightweight live-update path and controlled full refreshes to avoid HTTP backlog while keeping Analyzer data responsive.
+Time-critical data remains in internal RAM, including ISR capture storage, task stacks, command/event queues, and critical radio state. Networking runtime also consumes internal memory.
 
----
+Larger non-ISR buffers use PSRAM where appropriate, including RAW scratch space, last-capture storage, learning buffers, and Analyzer previews. Allocation paths provide internal-memory fallback or safe failure handling.
 
-## PSRAM and memory model
-
-The ESP32-S3 N16R8 build uses:
-
-* **16 MB Flash**
-* **8 MB PSRAM**
-
-Time-critical data remains in internal RAM, including ISR RF capture, FreeRTOS task stacks, command and event queues, critical radio state and Wi-Fi / TCP / MQTT runtime.
-
-Large non-ISR work buffers use PSRAM where appropriate, including System RAW scratch, Radio last RAW, Learn RAW buffer and Analyzer preview storage.
-
-PSRAM allocation has internal-RAM fallback and safe failure handling.
-
-The current ISR RF capture limit intentionally remains **600 pulses**. Larger non-ISR work buffers are prepared for up to **2048 pulses**.
-
----
+The ISR capture limit remains **600 pulses**. Larger non-ISR working buffers support up to **2048 pulses**; this does not imply a 2048-pulse ISR capture capability.
 
 ## Supported hardware
 
-| Hardware       | Status          |
-| -------------- | --------------- |
-| ESP32-S3 N16R8 | ✅ Supported     |
-| CC1101         | ✅ Supported     |
-| ESP8266        | Legacy — v1.2.0 |
+| Hardware | Status |
+| --- | --- |
+| ESP32-S3 N16R8                | Current target: 16 MB flash and 8 MB PSRAM                  |
+| CC1101, 433 MHz configuration | Supported dedicated Radio 1 path                            |
+| CC1101, 868 MHz configuration | Supported dedicated Radio 2 path                            |
+| SX1276 / LoRa                 | Hardware detection supported; RF-engine integration pending |
+| ESP8266                       | Legacy platform on the `esp8266` branch                     |
 
-### Current RF hardware scope
+SX1276 detection does not mean LoRa reception, transmission, or gateway integration is available.
 
-The current ESP32-S3 firmware uses **one active CC1101**.
+Use band-appropriate modules and antennas, a suitable power supply, and the wiring expected by the selected firmware configuration.
 
-The following are intentionally outside v2.0.0-beta.1:
-
-* second active CC1101
-* simultaneous 433 + 868 MHz operation
-* SX1276 / LoRa
-* RX Slot → TX
-* 2048-pulse ISR capture
-
-See `ESP32_S3_PORT.md` for the port milestones and exact port boundary.
-
----
-
-## 433 / 868 MHz selection
-
-Select the operating band on the **Settings** page:
-
-* 433 MHz → 433.920 MHz
-* 868 MHz → 868.350 MHz
-
-The selected value is stored in LittleFS and applied after restart.
-
-> **Hardware requirement:** Software frequency selection does not retune the antenna or RF matching network. Use a CC1101 module and antenna suitable for the selected band.
-
----
-
-## Installation
+## Installation and first start
 
 ### Requirements
 
-* ESP32-S3 N16R8
-* suitable CC1101 module
-* correctly tuned antenna
-* PlatformIO
-* USB data cable
+-  ESP32-S3 N16R8. 
+-  Suitable CC1101 modules and antennas; two modules for dual-band operation. 
+-  USB data cable. 
+-  PlatformIO, typically through Visual Studio Code. 
 
 ### Build and upload
 
-1. Open the project folder in VS Code with PlatformIO.
-2. Verify the `esp32s3` environment in `platformio.ini`.
-3. Run **Build**.
-4. Run **Upload** for the firmware.
-5. Run **Upload Filesystem Image** when the WebUI files in `data/` have changed.
+1.  Open the project in Visual Studio Code with PlatformIO. 
+2.  Verify the `esp32s3` environment in `platformio.ini`. 
+3.  Check the hardware connections and board configuration. 
+4.  Run **Build**. 
+5.  Run **Upload** to install the firmware. 
+6.  Run **Upload Filesystem Image** for the initial installation and whenever the WebUI files in `data/` change. 
 
-Release binaries are attached to the GitHub release:
+For prebuilt installation, use matching firmware and LittleFS images from the same release:
 
-* `OpenRF-Platform-v2.0.0-beta.1-ESP32S3-firmware.bin`
-* `OpenRF-Platform-v2.0.0-beta.1-ESP32S3-littlefs.bin`
+- `OpenRF-Platform-v2.0.0-beta.2-ESP32S3-firmware.bin` 
+- `OpenRF-Platform-v2.0.0-beta.2-ESP32S3-littlefs.bin` 
 
-> Uploading the filesystem image replaces LittleFS and may erase Wi-Fi, MQTT, Analyzer and slot configuration. Create a Backup first if configuration must be preserved.
+Follow the release’s flashing instructions and partition layout.
+
+> **Back up before uploading LittleFS.** A filesystem image replaces LittleFS and may erase Wi-Fi, MQTT, Analyzer settings, and saved slots. Firmware and WebUI assets must remain compatible.
 
 ### First start
 
-1. Connect to the `OpenRF-Platform` setup access point.
-2. Open `http://192.168.4.1`.
-3. Configure Wi-Fi and MQTT.
-4. Save the configuration and allow the device to restart.
-5. Open the assigned LAN IP address.
+1.  Connect to the **OpenRF-Platform** setup access point. 
+2.  Open [http://192.168.4.1](http://192.168.4.1). 
+3.  Configure Wi-Fi and, if required, MQTT. 
+4.  Save the configuration and allow the device to restart. 
+5.  Open the assigned LAN IP address. 
+6.  Check installed radios, enablement, and operating frequencies. 
+7.  Test reception before creating automations. 
 
----
+### Updates
 
-## RF Learn and TX Slots
-
-RAW Learn records an RF pulse train without requiring protocol knowledge.
-
-```text
-Start Learn
-  ↓
-Transmit original remote signal
-  ↓
-Inspect preview
-  ↓
-Accept
-  ↓
-Save to TX slot
-  ↓
-Replay
-```
-
-TX slots store RAW pulse sequences in LittleFS.
-
----
-
-## Universal RX Slots
-
-RX Slots store decoded event identity instead of depending on exact RAW equality.
-
-Typical identity fields:
-
-* Protocol
-* Device ID or transmitter signature
-* Control / button
-* Event / code
-
-For NVKP01:
-
-```text
-Protocol: NVKP01 Kinetic
-Device: nvkp01
-Control: button
-Event: PRESS
-```
-
-This allows different valid captures of the same physical action to trigger one stable automation event.
-
----
-
-## MQTT and Home Assistant
-
-OpenRF Platform publishes TX/RX state and events under the configured MQTT base topic.
-
-Home Assistant Discovery creates supported entities and device triggers automatically.
-
-The ESP32-S3 platform no longer depends on the ESP8266 low-memory Discovery restrictions.
-
----
-
-## REST API
-
-The WebUI uses the same JSON API available to integrations.
-
-Endpoint groups cover:
-
-* System and health
-* Radio state
-* Settings
-* RF Learn
-* TX Slots
-* RX Slots
-* Analyzer
-* OTA
-* Backup and Restore
-
----
+OTA firmware updates are available through the WebUI. A firmware update does not substitute for a required WebUI/filesystem update; follow the release instructions for both components.
 
 ## Backup and Restore
 
-Backup includes supported configuration, RF Slots and RX Slots.
+Backup includes supported configuration, RF Slots, and RX Slots.
 
-Use Backup before uploading a new LittleFS image, migrating configuration, testing a new release or replacing hardware.
+Create a backup before:
 
----
+-  Uploading a new LittleFS image. 
+-  Testing a new beta or migrating configuration. 
+-  Replacing hardware. 
+-  Making changes that would be difficult to recreate manually. 
+
+Keep backups somewhere other than the device and protect them as configuration data that may contain credentials.
+
+After restoring, verify radio settings, MQTT connectivity, slots, and Home Assistant behavior. If moving between releases, check compatibility before restoring.
 
 ## Troubleshooting
 
-### Dashboard shows API error
+| Symptom | What to check |
+| --- | --- |
+| Dashboard reports an API error                 | Confirm the device’s current IP, matching firmware/WebUI versions, and browser cache. Try a hard refresh with `Ctrl+F5`.                                            |
+| Settings disappeared after a filesystem upload | LittleFS was replaced. Restore a compatible backup or configure the device again.                                                                                   |
+| A radio is shown as disabled                   | Check its enablement and hardware detection on the System page.                                                                                                     |
+| Poor reception or short range                  | Check power, wiring, antenna, module band, frequency, RF profile, and local interference. A 433 MHz antenna is not an equivalent substitute for an 868 MHz antenna. |
+| Analyzer results seem delayed or inconsistent  | Compare candidate/result timestamps, refresh cached UI assets, and inspect core load, queues, and memory diagnostics.                                               |
+| A remote is not recognized                     | Inspect the full RAW capture and V2 rejection reason. An `UNKNOWN` result may be appropriate for an unsupported or incomplete signal.                               |
+| RAW matching is unreliable                     | Compare multiple captures for timing and waveform consistency. Check repeat structure, truncation, changing payloads, and matcher diagnostics.                      |
+| One press produces unexpected event counts     | Distinguish captures, decoder matches, and emitted logical events. Repeated transmissions may be suppressed by event deduplication.                                 |
+| Home Assistant receives no event               | Check MQTT connectivity, Discovery configuration, slot state, and whether V2 routing or RAW matching produced an actionable event.                                  |
 
-* Confirm the device IP address after restart.
-* Confirm that firmware and LittleFS belong to the same release.
-* Perform a hard browser refresh (`Ctrl+F5`).
-* Re-upload the filesystem image when frontend files were not updated.
+Do not relax protocol acceptance rules solely to make a difficult remote appear recognized. A false `KNOWN` decision can incorrectly claim another remote’s signal and block the intended RAW fallback.
 
-### Settings were erased after filesystem upload
+## Current beta limitations
 
-Uploading the filesystem image replaces LittleFS. Restore a backup or configure the device again.
+-  Full Deep Analyzer operation and automatic protocol integration are not available. 
+-  Protocol support is limited to implemented modules and compatible variants. 
+-  NVKP01 recognition remains conservative; some genuine or incomplete captures may remain `UNKNOWN`. 
+-  RAW matching and replay require suitable, repeatable signals and do not provide universal rolling-code support. 
+- `AMBIGUOUS` protocol results intentionally produce no automatic action. 
+-  LoRa RF-engine integration is pending despite SX1276 hardware detection. 
+-  ISR capture capacity remains 600 pulses. 
+-  Simultaneous dual-radio reception does not imply simultaneous transmission or uninterrupted reception during every radio operation. 
 
-### Analyzer data appears delayed
+## Long-term development direction
 
-* Confirm the browser is using the current WebUI files.
-* Perform a hard refresh.
-* Check Core 0 / Core 1 load in the header.
-* Check System memory diagnostics.
+The second CC1101, unified capture layer, dual-radio engine, and initial Deep Analyzer foundations are already present. Development can now build on them.
 
-### 868 MHz selected but range is poor
+### Multi-capture analysis
 
-Use a CC1101 module and antenna designed for 868 MHz. A 433 MHz antenna or module variant may perform poorly even when the CC1101 frequency register is set correctly.
+Planned work includes:
 
----
+-  Capture similarity and consistency comparison. 
+-  Pulse-width distributions and estimated base/bit timing. 
+-  Frame length, inter-frame gaps, and repeated-frame detection. 
+-  Preamble and synchronization detection. 
+-  Static and changing payload regions. 
+-  Static-code identification and indications of possible rolling or dynamic codes. 
+-  Modulation estimation. 
+-  Frequency, RSSI, and noise characterization. 
 
-## Repository branches
+Detecting changing data would not by itself decode a rolling-code protocol or make it replayable.
 
-### `esp32-s3`
+### Receiver optimization
 
-Default branch and current development platform.
+A later stage aims to compare CC1101 configurations using measured capture quality, including:
 
-Current public release: **v2.0.0-beta.1**
+-  RX bandwidth. 
+-  Data rate. 
+-  Frequency deviation. 
+-  Modulation. 
+-  Synchronization settings and other relevant RF parameters. 
 
-### `esp8266`
+The intended result is assistance in selecting a suitable RF profile, potentially including automatic optimization once it can be validated reliably.
 
-Legacy stable implementation.
+### Guided integration
 
-Final feature release: **v1.2.0**
+The target workflow is **Analyze → Learn → Save → Home Assistant**, supported by capture comparison, optimization, verification, and testing.
 
-The ESP8266 branch may receive critical fixes, but no new feature development is planned.
+> Press the remote. Let OpenRF capture, compare, analyze, and optimize the signal, then help turn it into a usable local automation.
 
----
+Community RF profiles are a possible later extension. LoRa integration, additional radio technologies, and optional cloud functionality remain longer-term possibilities rather than current release capabilities.
 
-## Repository documentation
+These are development directions, not promises of completed automatic protocol generation or universal remote compatibility.
 
-* `ESP32_S3_PORT.md` – seven ESP32-S3 port milestones and port boundary
-* `ANALYZER_V2_FINAL.md` – RF Analyzer architecture and behaviour
-* `CHANGELOG.md` – project version history
-* `RELEASE_NOTES_V1.2.0.md` – final ESP8266 release notes
-* `docs/` – subsystem and implementation documentation
-* `CONTRIBUTING.md` – contribution rules
-* `LICENSE` – MIT License
+## Repository branches and documentation
 
----
+| Branch | Purpose |
+| --- | --- |
+| `esp32-s3`    | Default branch and active development platform; current release **v2.0.0-beta.2** |
+| `esp8266`     | Legacy implementation; final feature release **v1.2.0**                           |
+
+The ESP8266 branch may receive critical fixes, but new feature development targets ESP32-S3.
+
+Start with this README, then consult:
+
+- [CHANGELOG.md](CHANGELOG.md) — project and release history.
+- [RELEASE_NOTES_V2.0.0-beta.2.md](RELEASE_NOTES_V2.0.0-beta.2.md) — detailed V2 Protocol Engine, dual-radio, RAW and Deep Analyzer foundation development history.
+- [RELEASE_NOTES_V2.0.0-beta.1.md](RELEASE_NOTES_V2.0.0-beta.1.md) — historical ESP32-S3 migration release.
+- [RELEASE_NOTES_V1.2.0.md](RELEASE_NOTES_V1.2.0.md) — final ESP8266 feature release.
+- [RELEASE_NOTES_V1.1.0.md](RELEASE_NOTES_V1.1.0.md) and [RELEASE_NOTES_V1.0.0.md](RELEASE_NOTES_V1.0.0.md) — earlier release history.
+- [CONTRIBUTING.md](CONTRIBUTING.md) — contribution guidance.
+- [LICENSE](LICENSE) — MIT license terms.
+
+Use documentation from the branch and release you are running. Historical development notes may describe earlier behavior.
 
 ## Responsible use
 
-Use OpenRF Platform only with devices you own or are authorized to test.
+Use OpenRF only with devices you own or are authorized to test.
 
-Follow local radio regulations, permitted frequency bands, power limits and duty-cycle requirements. Do not use the project to interfere with other radio users or bypass security systems.
+Follow applicable radio regulations, permitted frequency bands, transmission power limits, and duty-cycle requirements. Do not interfere with other radio users or use the project to bypass security systems.
 
----
+Keep the management interface and MQTT access appropriately protected. Validate automations before relying on RF events to control physical equipment.
 
-## License
+## License and credits
 
-OpenRF Platform is released under the MIT License. See [LICENSE](LICENSE).
+OpenRF Platform is released under the **MIT License**. See [LICENSE](LICENSE).
 
----
-
-## Credits
-
-Created and maintained by **Kocsis Krisztián**.
-
-Developed by Kocsis Krisztián with implementation assistance, architecture discussions and documentation support from **ChatGPT (OpenAI)**.
+Created and maintained by **Kocsis Krisztián**, with implementation assistance, architecture discussions, and documentation support from **ChatGPT (OpenAI)**.
 
 ⭐ If OpenRF Platform is useful to you, consider starring the project on GitHub.
 
@@ -539,7 +398,7 @@ Developed by Kocsis Krisztián with implementation assistance, architecture disc
 
 OpenRF Platform is free and open source.
 
-If you find the project useful and would like to support its continued development, hardware testing and future features, you can buy me a coffee:
+If you find the project useful and would like to support its continued development, hardware testing, and future features, you can buy me a coffee:
 
 [☕ Buy me a coffee](https://buymeacoffee.com/krissz55555)
 

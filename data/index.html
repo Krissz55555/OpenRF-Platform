@@ -1,306 +1,783 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>OpenRF Platform</title>
-  <link rel="icon" href="/logo.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/style.css">
+<meta charset="utf-8">
+<meta content="width=device-width, initial-scale=1.0" name="viewport">
+<title>OpenRF Platform</title>
+<link href="/logo.svg" rel="icon" type="image/svg+xml">
+<link href="/style.css" rel="stylesheet">
 </head>
 <body>
-  <header class="topbar"><div class="topbar-content">
-    <div class="brand"><img class="brand-logo" src="/logo.svg" alt="OpenRF Platform logo"><div><p class="eyebrow">OPEN SOURCE RF GATEWAY &amp; ANALYZER</p><h1>OpenRF Platform</h1></div></div>
-    <div class="live-metrics" aria-label="Live system load">
-      <div class="metric-gauge metric-core0"><div><b>CORE 0</b><small>System</small></div><div id="core0Gauge" class="gauge" style="--p:0"><span id="core0Load">0%</span></div></div>
-      <div class="metric-gauge metric-core1"><div><b>CORE 1</b><small>Radio</small></div><div id="core1Gauge" class="gauge" style="--p:0"><span id="core1Load">0%</span></div></div>
-      <div class="metric-gauge metric-psram"><div><b>RAM</b><small>PSRAM</small></div><div id="psramGauge" class="gauge" style="--p:0"><span id="psramLoad">0%</span></div></div>
-      <div class="metric-gauge metric-heap"><div><b>HEAP</b><small>Used</small></div><div id="heapGauge" class="gauge" style="--p:0"><span id="heapLoad">0%</span></div></div>
-    </div>
-    <div class="topbar-status"><span id="uiVersion" class="version-chip">v1.2.0</span><span id="connectionBadge" class="badge badge-loading">Connecting</span></div>
-  </div></header>
-  <main class="container">
-    <nav class="tabs" aria-label="Main navigation">
-      <button class="tab-button active" data-page="dashboard" type="button">Dashboard</button>
-      <span class="tab-group-label">RF Transmit</span>
-      <button class="tab-button" data-page="learn" type="button">RF Learn</button>
-      <button class="tab-button" data-page="slots" type="button">RF Slots</button>
-      <span class="tab-group-label">RF Receive</span>
-      <button class="tab-button" data-page="rxslots" type="button">RX Slots</button>
-      <button class="tab-button" data-page="analyzer" type="button">RF Analyzer</button>
-      <span class="tab-group-label">System</span>
-      <button class="tab-button" data-page="settings" type="button">Settings</button>
-      <button class="tab-button" data-page="system" type="button">System</button>
-      <button class="tab-button" data-page="about" type="button">About</button>
-    </nav>
+<header class="topbar"><div class="topbar-content">
+<div class="brand"><img alt="OpenRF Platform logo" class="brand-logo" src="/logo.svg"><div><p class="eyebrow">OPEN SOURCE RF GATEWAY &amp; ANALYZER</p><h1>OpenRF Platform</h1></div></div>
+<div aria-label="Live system load" class="live-metrics">
+<div class="metric-gauge metric-core0"><div><b>CORE 0</b><small>System</small></div><div class="gauge" id="core0Gauge" style="--p:0"><span id="core0Load">0%</span></div></div>
+<div class="metric-gauge metric-core1"><div><b>CORE 1</b><small>Radio</small></div><div class="gauge" id="core1Gauge" style="--p:0"><span id="core1Load">0%</span></div></div>
+<div class="metric-gauge metric-psram"><div><b>RAM</b><small>PSRAM</small></div><div class="gauge" id="psramGauge" style="--p:0"><span id="psramLoad">0%</span></div></div>
+<div class="metric-gauge metric-heap"><div><b>HEAP</b><small>Used</small></div><div class="gauge" id="heapGauge" style="--p:0"><span id="heapLoad">0%</span></div></div>
+</div>
+<div class="topbar-status">
+<span class="tune-session-badge" hidden="" id="rf1TuneHeader">433 TUNED · 15:00</span>
+<span class="tune-session-badge" hidden="" id="rf2TuneHeader">868 TUNED · 15:00</span>
+<span class="version-chip" id="uiVersion">Loading…</span><span class="badge badge-loading" id="connectionBadge">Connecting</span>
+</div>
+</div></header>
+<main class="container">
+<nav aria-label="Main navigation" class="tabs">
+<button class="tab-button active" data-page="dashboard" type="button">Dashboard</button>
+<button class="tab-button" data-page="learn" type="button">RF Learn</button>
+<button class="tab-button" data-page="slots" type="button">RF Slots</button>
+<button class="tab-button" data-page="rxslots" type="button">RX Slots</button>
+<button class="tab-button" data-page="analyzer" type="button">RF Analyzer</button>
+<button class="tab-button" data-page="settings" type="button">Settings</button>
+<button class="tab-button" data-page="system" type="button">System</button><button class="tab-button" data-page="diagnostics" type="button">Diagnostics</button>
+<button class="tab-button" data-page="about" type="button">About</button>
+</nav>
+<section class="page active" id="page-dashboard">
+<div class="page-heading"><div><p class="eyebrow">SYSTEM OVERVIEW</p><h2>Dashboard</h2></div><button class="button button-secondary" id="refreshStatusButton" type="button">Refresh</button></div>
+<div class="status-grid">
+<article class="card status-card"><span class="label">Status</span><strong id="status">Loading...</strong></article>
+<article class="card status-card"><span class="label">Firmware</span><strong id="firmware">-</strong></article>
+<article class="card status-card"><span class="label">IP address</span><strong id="ip">-</strong></article>
+<article class="card status-card"><span class="label">WiFi mode</span><strong id="wifiMode">-</strong></article>
+<article class="card status-card"><span class="label">Radio 1 · 433 MHz</span><strong id="dashboardRadio1">Loading…</strong></article>
+<article class="card status-card"><span class="label">Radio 2 · 868 MHz</span><strong id="dashboardRadio2">Loading…</strong></article>
+<article class="card status-card"><span class="label">MQTT</span><strong id="mqttStatus">-</strong></article>
+<article class="card status-card"><span class="label">Last RAW frame</span><strong id="rawPulseCount">Waiting...</strong></article>
+<article class="card status-card"><span class="label">Frame duration</span><strong id="rawDuration">-</strong></article>
+<article class="card status-card"><span class="label">Frame RSSI</span><strong id="rawRssi">-</strong></article>
+<article class="card status-card"><span class="label">Uptime</span><strong id="uptime">-</strong></article>
+</div>
+<article class="card raw-card"><div class="raw-heading"><div><span class="label">LATEST CAPTURE</span><strong id="rawSequence">No signal received yet</strong></div><span class="raw-age" id="rawAge">-</span></div><pre class="raw-preview" id="rawPreview">Press a remote button near an enabled 433 or 868 MHz receiver.</pre></article>
+</section>
+<section class="page" id="page-learn">
+<div class="page-heading"><div><p class="eyebrow">RAW CAPTURE · TX + RX</p><h2>RF Learn</h2></div></div>
+<article class="card learn-card">
+<div class="learn-status-row"><div><span class="label">Learn state</span><strong id="learnState">IDLE</strong></div><span class="badge badge-loading" id="learnBadge">Idle</span></div>
+<p class="learn-message" id="learnMessage">Capture a remote signal for replay and recognition from a saved RF Slot.</p>
+<div class="button-row">
+<button class="button button-primary" id="learnStartButton" type="button">Start RF Learn</button>
+<button class="button button-success" disabled id="learnAcceptButton" type="button">Keep preview</button>
+<button class="button button-success" disabled id="learnSaveButton" type="button">Save to Slot</button>
+<button class="button button-primary" disabled id="learnTestSendButton" type="button">Test Send</button>
+<button class="button button-danger" disabled id="learnDiscardButton" type="button">Discard</button>
+</div>
+</article>
+<div class="status-grid learn-metrics">
+<article class="card status-card"><span class="label">Pulse count</span><strong id="learnPulseCount">-</strong></article>
+<article class="card status-card"><span class="label">Duration</span><strong id="learnDuration">-</strong></article>
+<article class="card status-card"><span class="label">RSSI</span><strong id="learnRssi">-</strong></article>
+<article class="card status-card"><span class="label">Noise floor</span><strong id="learnNoiseFloor">-</strong></article>
+<article class="card status-card"><span class="label">Rejected</span><strong id="learnRejected">0</strong></article>
+<article class="card status-card"><span class="label">Last reject</span><strong id="learnRejectReason">-</strong></article>
+</div>
+<article class="card raw-card"><div class="raw-heading"><div><span class="label">LEARN PREVIEW</span><strong id="learnPreviewTitle">No preview</strong></div></div><pre class="raw-preview" id="learnRawPreview">The captured signal will appear here before it is accepted.</pre></article>
+<p class="notice">Keep preview holds the capture temporarily until restart or discard. Save to Slot stores it permanently for TX replay and UNKNOWN RAW receive matching. Known protocols use RX Slots for normalized receive events.</p>
+</section>
+<section class="page" id="page-settings">
+<div class="page-heading"><div><p class="eyebrow">DEVICE CONFIGURATION</p><h2>Settings</h2></div></div>
+<form class="card form-card" id="settingsForm">
+<div class="form-section"><h3>Device</h3><label class="field"><span>Hostname</span><input id="hostname" maxlength="32" required="" type="text" value="OpenRF-Platform"><small>1–32 characters.</small></label><label class="field"><span>Replay count</span><input id="replayCount" max="10" min="1" required="" type="number" value="1"><small>Number of transmissions when an RF slot is sent.</small></label></div><div class="form-section"><h3>WiFi client</h3><p>Optional. The setup access point is disabled automatically after a successful connection. It remains available only when WiFi is not configured or the connection fails.</p><label class="field"><span>WiFi SSID</span><input id="wifiSsid" maxlength="32" type="text"></label><label class="field"><span>WiFi password</span><input id="wifiPassword" maxlength="64" placeholder="Leave empty to keep saved password" type="password"><small id="wifiPasswordState">No WiFi password information loaded.</small></label></div>
+<div class="form-section"><div class="toggle-row"><div><h3>MQTT</h3><p>Enable communication with MQTT and Home Assistant.</p></div><label class="switch"><input id="mqttEnabled" type="checkbox"><span class="switch-slider"></span></label></div><div id="mqttFields"><label class="field"><span>MQTT host</span><input id="mqttHost" maxlength="64" type="text"></label><label class="field"><span>MQTT port</span><input id="mqttPort" max="65535" min="1" type="number"></label><label class="field"><span>MQTT username</span><input id="mqttUser" maxlength="64" type="text"></label><label class="field"><span>MQTT password</span><input id="mqttPassword" maxlength="128" placeholder="Leave empty to keep saved password" type="password"><small id="passwordState">No password information loaded.</small></label><div class="toggle-row discovery-toggle"><div><h3>Home Assistant Auto Discovery</h3><p>Publish saved RF slots and diagnostic sensors automatically when MQTT connects.</p></div><label class="switch"><input checked id="homeAssistantDiscovery" type="checkbox"><span class="switch-slider"></span></label></div></div></div>
+<div class="form-actions"><span class="form-message" id="saveMessage"></span><button class="button button-primary" id="saveButton" type="submit">Save settings</button></div>
+</form>
+</section>
+<section class="page" id="page-slots">
+<div class="page-heading"><div><p class="eyebrow">BIDIRECTIONAL RAW RF MEMORY</p><h2>RF Slots</h2></div><button class="button button-secondary" id="refreshSlotsButton" type="button">Refresh</button></div>
+<div class="card slot-summary"><strong id="slotUsage">Loading slots...</strong><span class="form-message" id="slotMessage"></span></div>
+<p class="notice">Learned RAW slots support both transmission and reception. The saved waveform can still be replayed with Send, and V2-UNKNOWN receptions are matched against the same learned RAW signature for MQTT / Home Assistant receive events.</p>
+<div class="slot-grid" id="slotGrid"></div>
+</section>
+<section class="page" id="page-rxslots">
+<div class="page-heading"><div><p class="eyebrow">RF TO HOME ASSISTANT</p><h2>RX Slots</h2></div><button class="button button-secondary" id="refreshRxSlotsButton" type="button">Refresh</button></div>
+<div class="card slot-summary"><strong id="rxSlotUsage">Loading RX slots...</strong><span class="form-message" id="rxSlotMessage"></span></div>
+<article class="card rx-learn-filter-card">
+<div class="analyzer-filter-heading">
+<div>
+<span class="label">RX Slot Learn filter</span>
+<strong>Minimum signal strength</strong>
+</div>
+<span class="form-message" id="rxLearnRssiSaveState">Saved automatically</span>
+</div>
+<label class="analyzer-control">
+<span>Minimum RSSI <strong id="rxLearnRssiValue">-75 dBm</strong></span>
+<input id="rxLearnRssiThreshold" max="-20" min="-100" step="1" type="range" value="-75">
+</label>
+<div class="analyzer-slider-scale"><span>-100 dBm · sensitive</span><span>-20 dBm · nearby only</span></div>
+<p class="learn-message">During RX Slot learning, the signal must reach this RSSI threshold <strong>and</strong> remain at least 6 dB above the measured noise floor. Weaker captures are ignored and learning continues automatically.</p>
+</article>
+<p class="notice">Press Capture on an RX slot, then press the remote button once. Known V2 protocols are saved here and publish Home Assistant receive events. For an unknown protocol, use RF Learn → RF Slots; saved RAW slots can recognize matching UNKNOWN receptions.</p>
+<div class="slot-grid" id="rxSlotGrid"></div>
+</section>
+<section class="page" id="page-analyzer">
+<div class="page-heading">
+<div><p class="eyebrow">LIVE RF DIAGNOSTICS</p><h2>RF Analyzer</h2></div>
+<div class="button-row analyzer-heading-actions">
+<label class="analyzer-power-control" title="Enable or disable RF Analyzer">
+<span class="analyzer-power-title">RF Analyzer</span>
+<span class="analyzer-segmented-switch">
+<input aria-label="RF Analyzer power" id="analyzerDeveloperMode" type="checkbox">
+<span class="analyzer-segment analyzer-segment-off">◉ OFF</span>
+<span class="analyzer-segment analyzer-segment-on">⌁ ON</span>
+</span>
+<b class="sr-only" id="developerModeState">OFF</b>
+</label>
+<button class="button button-secondary" id="copyAnalyzerButton" type="button">Copy report</button>
+<button class="button button-secondary" id="refreshAnalyzerButton" type="button">Refresh</button>
+</div>
+</div>
+<div class="developer-exclusive-warning" hidden="" id="developerExclusiveWarning"></div>
+<article class="card analyzer-radio-selector-card">
+<div>
+<span class="label">Analyzer view</span>
+<strong>Choose which receiver to inspect</strong>
+</div>
+<div aria-label="Analyzer radio view" class="analyzer-radio-selector" role="group">
+<button class="button button-primary analyzer-radio-view active" data-analyzer-view="both" id="analyzerViewBoth" type="button">Both</button>
+<button class="button button-secondary analyzer-radio-view" data-analyzer-view="1" id="analyzerViewRadio1" type="button">Radio 1 · 433</button>
+<button class="button button-secondary analyzer-radio-view" data-analyzer-view="2" id="analyzerViewRadio2" type="button">Radio 2 · 868</button>
+</div>
+</article>
+<div class="analyzer-both-overview" id="analyzerBothOverview">
+<article class="card analyzer-radio-summary" data-radio-summary="1">
+<div class="learn-status-row">
+<div><span class="label">Radio 1</span><strong>433 MHz Analyzer</strong></div>
+<span class="badge badge-loading" id="analyzerSummary1Badge">Waiting</span>
+</div>
+<div class="analyzer-radio-summary-grid">
+<div><span>Frequency</span><strong id="analyzerSummary1Frequency">—</strong></div>
+<div><span>Candidate</span><strong id="analyzerSummary1Candidate">—</strong></div>
+<div><span>Last frame</span><strong id="analyzerSummary1Frame">—</strong></div>
+<div><span>Peak RSSI</span><strong id="analyzerSummary1Rssi">—</strong></div>
+</div>
+</article>
+<article class="card analyzer-radio-summary" data-radio-summary="2">
+<div class="learn-status-row">
+<div><span class="label">Radio 2</span><strong>868 MHz Analyzer</strong></div>
+<span class="badge badge-loading" id="analyzerSummary2Badge">Waiting</span>
+</div>
+<div class="analyzer-radio-summary-grid">
+<div><span>Frequency</span><strong id="analyzerSummary2Frequency">—</strong></div>
+<div><span>Candidate</span><strong id="analyzerSummary2Candidate">—</strong></div>
+<div><span>Last frame</span><strong id="analyzerSummary2Frame">—</strong></div>
+<div><span>Peak RSSI</span><strong id="analyzerSummary2Rssi">—</strong></div>
+</div>
+</article>
+</div>
+<article class="card learn-card">
+<div class="learn-status-row"><div><span class="label">Latest RF event</span><strong id="analyzerSequence">Waiting for signal</strong></div><span class="badge badge-loading" id="analyzerBadge">Idle</span></div>
+<p class="learn-message analyzer-mode-message" id="analyzerModeMessage"><strong>RF Analyzer is disabled.</strong> The gateway remains fully operational. Enable RF Analyzer for live RF diagnostics; on ESP32-S3 it runs in non-exclusive mode alongside RX Slots, MQTT and Home Assistant.</p>
+</article>
+<div class="analyzer-toggle-row">
+<label class="toggle developer-setting"><input checked id="analyzerShowRejected" type="checkbox"><span>Show structured rejected signals</span></label>
+<label class="toggle"><input id="analyzerFreezeCandidate" type="checkbox"><span>Pause candidate updates</span></label>
+</div>
+<div class="analyzer-live-grid">
+<div><span class="label">Current RSSI</span><strong id="analyzerCurrentRssi">-</strong></div>
+<div><span class="label">Peak RSSI</span><strong id="analyzerPeakRssi">-</strong></div>
+<div><span class="label">Filtered as weak</span><strong id="analyzerWeakRssi">0</strong></div>
+</div>
+<details class="card analyzer-advanced"><summary>Advanced Analyzer settings and timing</summary><article class="card developer-only analyzer-detail-only" hidden="">
+<div class="raw-heading"><div><span class="label">PIPELINE TIMING</span><strong>Analyzer pipeline timing</strong></div><span class="raw-age" id="analyzerLatencyState">Live</span></div>
+<div class="status-grid candidate-grid">
+<div><span class="label">Analyzer result age</span><strong id="analyzerServerAge">-</strong></div>
+<div><span class="label">Latest Candidate age</span><strong id="analyzerCandidateLatencyAge">-</strong></div>
+<div><span class="label">Analyzer processing</span><strong id="analyzerProcessingTime">-</strong></div>
+<div><span class="label">API build</span><strong id="analyzerApiBuildTime">-</strong></div>
+<div><span class="label">Browser request</span><strong id="analyzerBrowserRequestTime">-</strong></div>
+</div>
+<p class="learn-message analyzer-filter-note">Diagnostic only. “Analyzer result age” is the age of the latest full Analyzer result; “Latest Candidate age” tracks the newest RAW Candidate independently. Browser request is the actual HTTP round-trip time.</p>
+</article>
+<article class="card analyzer-filter-card developer-only" hidden="">
+<div class="analyzer-filter-heading">
+<div><span class="label">Advanced controls</span><strong>Analyzer sensitivity and classification</strong></div>
+<span class="form-message" id="analyzerRssiSaveState">Saved automatically</span>
+</div>
+<label class="analyzer-control"><span>RSSI threshold <strong id="analyzerRssiThresholdValue">-75 dBm</strong></span><input id="analyzerRssiThreshold" max="-20" min="-100" step="1" type="range" value="-75"></label>
+<div class="analyzer-slider-scale"><span>-100 dBm · sensitive</span><span>-20 dBm · nearby only</span></div>
+<div class="analyzer-controls-grid">
+<label class="analyzer-control developer-setting"><span>Minimum pulse count <strong id="analyzerMinPulsesValue">20</strong></span><input id="analyzerMinPulses" max="100" min="2" step="1" type="range" value="20"></label>
+<label class="analyzer-control developer-setting"><span>Minimum duration <strong id="analyzerMinDurationValue">5.0 ms</strong></span><input id="analyzerMinDuration" max="100000" min="500" step="500" type="range" value="5000"></label>
+<label class="analyzer-control developer-setting"><span>Similarity <strong id="analyzerSimilarityValue">82%</strong></span><input id="analyzerSimilarity" max="100" min="50" step="1" type="range" value="82"></label>
+<label class="analyzer-control developer-setting"><span>Required occurrences <strong id="analyzerOccurrencesValue">3</strong></span><input id="analyzerOccurrences" max="10" min="1" step="1" type="range" value="3"></label>
+<label class="analyzer-control developer-setting"><span>Alternation tolerance <strong id="analyzerAlternationValue">90%</strong></span><input id="analyzerAlternation" max="100" min="50" step="1" type="range" value="90"></label>
+</div>
+<p class="learn-message analyzer-filter-note">ESP32-S3 non-exclusive Analyzer: full RF diagnostics can run while RX Slots, MQTT, Home Assistant and normal gateway services remain active.</p>
+</article>
+</details><article class="card last-candidate-card developer-only analyzer-detail-only" hidden="">
+<div class="raw-heading"><div><span class="label">LAST CANDIDATE · BEFORE ANALYZER FILTERS</span><strong id="candidateSequence">Waiting for candidate</strong></div><span class="raw-age" id="candidateAge">-</span></div>
+<div class="status-grid candidate-grid">
+<div><span class="label">RSSI</span><strong id="candidateRssi">-</strong></div>
+<div><span class="label">Pulse count</span><strong id="candidatePulseCount">-</strong></div>
+<div><span class="label">Duration</span><strong id="candidateDuration">-</strong></div>
+<div><span class="label">Reject reason</span><strong id="candidateRejectReason">-</strong></div>
+</div>
+<div class="developer-panel" id="candidateDeveloperMetrics">
+<div class="status-grid candidate-grid">
+<div><span class="label">Alternation</span><strong id="candidateAlternation">-</strong></div>
+<div><span class="label">Same-sign pairs</span><strong id="candidateSamePairs">-</strong></div>
+<div><span class="label">Longest run</span><strong id="candidateLongestRun">-</strong></div>
+<div><span class="label">Normalized pulses</span><strong id="candidateNormalizedCount">-</strong></div>
+</div>
+<pre class="raw-preview candidate-preview" id="candidateNormalizedRaw">Normalized RAW will appear here.</pre>
+</div>
+<pre class="raw-preview candidate-preview" id="candidateRaw">Every Candidate will appear here, including weak and rejected captures.</pre>
+</article>
+<div class="status-grid learn-metrics analyzer-detail-only">
+<article class="card status-card"><span class="label">Frequency</span><strong id="analyzerFrequency">-</strong></article>
+<article class="card status-card"><span class="label">RSSI</span><strong id="analyzerRssi">-</strong></article>
+<article class="card status-card"><span class="label">Protocol</span><strong id="analyzerProtocol">-</strong></article>
+<article class="card status-card"><span class="label">Encoding</span><strong id="analyzerEncoding">-</strong></article>
+<article class="card status-card"><span class="label">Symbols / bits</span><strong id="analyzerBits">-</strong></article>
+<article class="card status-card"><span class="label">Base pulse</span><strong id="analyzerBasePulse">-</strong></article>
+<article class="card status-card"><span class="label">Frame count</span><strong id="analyzerFrameCount">-</strong></article>
+<article class="card status-card"><span class="label">Quality</span><strong id="analyzerQuality">-</strong></article>
+<article class="card status-card"><span class="label">Pulse count</span><strong id="analyzerPulseCount">-</strong></article>
+<article class="card status-card"><span class="label">Duration</span><strong id="analyzerDuration">-</strong></article>
+<article class="card status-card"><span class="label">Code</span><strong id="analyzerCode">-</strong></article>
+<article class="card status-card"><span class="label">Pulse classes</span><strong id="analyzerClasses">-</strong></article>
+</div>
+<div class="analyzer-stat-grid analyzer-detail-only">
+<article class="card status-card"><span class="label">Candidates</span><strong id="analyzerCandidates">0</strong></article>
+<article class="card status-card"><span class="label">Accepted</span><strong id="analyzerAccepted">0</strong></article>
+<article class="card status-card"><span class="label">Rejected</span><strong id="analyzerRejected">0</strong></article>
+<article class="card status-card"><span class="label">Decoded</span><strong id="analyzerDecoded">0</strong></article>
+<article class="card status-card"><span class="label">Unknown</span><strong id="analyzerUnknown">0</strong></article>
+</div>
+<article class="card raw-card"><div class="raw-heading"><div><span class="label">SIGNAL REPORT / RAW EXPORT</span><strong id="analyzerDetailTitle">No frame analyzed yet</strong></div><span class="raw-age" id="analyzerAge">-</span></div><pre class="raw-preview" id="analyzerBitstream">Press a remote button near the CC1101 receiver.</pre></article>
+</section>
+<section class="page" id="page-system"><div class="page-heading"><div><p class="eyebrow">MAINTENANCE</p><h2>System</h2></div></div><article class="card memory-diagnostics-card">
+<div class="analyzer-filter-heading">
+<div><span class="label">ESP32-S3 memory</span><strong>N16R8 hardware diagnostics</strong></div>
+<span class="form-message" id="memoryDiagState">Loading...</span>
+</div>
+<div class="memory-diagnostics-grid">
+<div><span>Flash total</span><strong id="memoryFlashTotal">—</strong></div>
+<div><span>PSRAM total</span><strong id="memoryPsramTotal">—</strong></div>
+<div><span>PSRAM free</span><strong id="memoryPsramFree">—</strong></div>
+<div><span>Internal heap total</span><strong id="memoryHeapTotal">—</strong></div>
+<div><span>Internal heap free</span><strong id="memoryHeapFree">—</strong></div>
+<div><span>OpenRF PSRAM buffers</span><strong id="memoryOpenrfPsram">—</strong></div>
+<div><span>Analyzer PSRAM stores</span><strong id="memoryAnalyzerPsram">—</strong></div>
+</div>
+</article><article class="card rf-hardware-card">
+<div class="learn-status-row">
+<div>
+<span class="label">RF hardware</span>
+<strong>Installed radio modules</strong>
+</div>
+<span class="form-message" id="rfHardwareState">Loading...</span>
+</div>
+<div class="rf-hardware-grid">
+<div class="rf-hardware-item">
+<div class="rf-hardware-copy">
+<span>CC1101 Radio 1</span>
+<small>433 MHz · CS GPIO10 · GDO0 GPIO4 · GDO2 GPIO5</small>
+<small id="rf1EngineState">Engine: checking</small>
+<small id="rf1FrequencyState">Default: 433.920 MHz · Operating: —</small>
+</div>
+<div class="rf-hardware-actions">
+<strong class="badge badge-loading" id="rf1HardwareState">Checking</strong>
+<label class="rf-enable-toggle">
+<input id="rf1Enabled" type="checkbox">
+<span>Enabled</span>
+</label>
+</div>
+</div>
+<div class="rf-hardware-item">
+<div class="rf-hardware-copy">
+<span>CC1101 Radio 2</span>
+<small>868 MHz · CS GPIO9 · GDO0 GPIO6 · GDO2 GPIO7</small>
+<small id="rf2EngineState">Engine: checking</small>
+<small id="rf2FrequencyState">Default: 868.350 MHz · Operating: —</small>
+</div>
+<div class="rf-hardware-actions">
+<strong class="badge badge-loading" id="rf2HardwareState">Checking</strong>
+<label class="rf-enable-toggle">
+<input id="rf2Enabled" type="checkbox">
+<span>Enabled</span>
+</label>
+</div>
+</div>
+<div class="rf-hardware-item">
+<div class="rf-hardware-copy">
+<span>SX1276 LoRa</span>
+<small>Dedicated SPI · NSS GPIO17 · DIO0 GPIO21 · DIO1 GPIO2</small>
+<small id="loraEngineState">Engine: integration pending</small>
+</div>
+<div class="rf-hardware-actions">
+<strong class="badge badge-loading" id="loraHardwareState">Checking</strong>
+<label class="rf-enable-toggle" hidden="">
+<input id="loraEnabled" type="checkbox" disabled>
+<span>Enabled</span>
+</label>
+</div>
+</div>
+</div>
+<div class="rf-hardware-footer">
+<p class="platform-note">Detected = hardware is physically responding. Enabled = OpenRF is allowed to use the module. Default is the normal band frequency; Operating is the frequency the radio is actually using after optional tuning. LoRa RF-engine integration is still pending.</p>
+<span class="form-message" id="rfEnableMessage"></span>
+<button class="button button-primary" id="saveRfEnableButton" type="button" disabled>Save radio settings</button>
+</div>
+</article><article class="card">
+<span class="label">RF tuning session</span>
+<p class="platform-note"><strong>How tuning works:</strong> applying a detected carrier starts a 15-minute TUNED session for that radio. RX Slot and RAW Learn store the current Operating frequency during this window. Temporary TX/scanner retunes return to the current Operating frequency. When the countdown reaches 00:00, or when you press Restore Default, the radio returns to its Default band frequency. A reboot also starts from Default.</p>
+</article><article class="card frequency-scan-card">
+<div class="learn-status-row">
+<div>
+<span class="label">433 MHz diagnostics</span>
+<strong>Radio 1 frequency scanner</strong>
+</div>
+<span class="form-message" id="frequencyScan433State">Ready</span>
+</div>
+<p class="platform-note">Adaptive RSSI sweep for unknown 433 MHz transmitters. The scanner revisits every frequency several times, keeps the strongest RSSI seen per bin, then estimates the carrier from the peak region. Repeatedly press the remote throughout the scan.</p>
+<div class="frequency-scan-controls">
+<label class="field">
+<span>Start MHz</span>
+<input id="frequencyScan433Start" max="440" min="430" step="0.025" type="number" value="433.600">
+</label>
+<label class="field">
+<span>End MHz</span>
+<input id="frequencyScan433End" max="440" min="430" step="0.025" type="number" value="434.200">
+</label>
+<label class="field">
+<span>Step MHz</span>
+<select id="frequencyScan433Step">
+<option value="0.050">50 kHz · fast</option>
+<option selected value="0.025">25 kHz · normal</option>
+<option value="0.010">10 kHz · fine</option>
+</select>
+</label>
+<label class="field">
+<span>Listen / point</span>
+<select id="frequencyScan433Dwell">
+<option value="25">25 ms · fast</option>
+<option selected value="35">35 ms · normal</option>
+<option value="60">60 ms · sensitive</option>
+</select>
+</label>
+<label class="field">
+<span>Sweep passes</span>
+<select id="frequencyScan433Passes">
+<option value="2">2 · fast</option>
+<option selected value="4">4 · normal</option>
+<option value="8">8 · burst sensitive</option>
+</select>
+</label>
+<button class="button button-primary" id="frequencyScan433Button" type="button">Scan 433 MHz</button>
+</div>
+<div class="frequency-scan-result frequency-scan-result-expanded">
+<div><span>Peak bin</span><strong id="frequencyScan433BestFrequency">—</strong></div>
+<div><span>Estimated carrier</span><strong id="frequencyScan433EstimatedCarrier">—</strong></div>
+<div><span>Peak RSSI</span><strong id="frequencyScan433BestRssi">—</strong></div>
+<div><span>Noise floor</span><strong id="frequencyScan433NoiseFloor">—</strong></div>
+<div><span>Above noise</span><strong id="frequencyScan433Delta">—</strong></div>
+<div><span>Signal</span><strong class="scan-detection" id="frequencyScan433Detection">—</strong></div>
+<div><span>Samples</span><strong id="frequencyScan433SampleCount">—</strong></div>
+</div>
+<div class="frequency-tune-row">
+<span class="form-message" id="frequencyScan433TuneState"></span>
+<button class="button button-secondary" id="frequencyScan433RestoreButton" type="button">Restore Default</button>
+<button class="button button-secondary" disabled id="frequencyScan433TuneButton" type="button">
+            Tune Radio 1 to detected carrier
+          </button>
+</div>
+<div class="frequency-scan-bars" id="frequencyScan433Bars">
+<span class="platform-note">No scan yet.</span>
+</div>
+</article><article class="card frequency-scan-card">
+<div class="learn-status-row">
+<div>
+<span class="label">868 MHz diagnostics</span>
+<strong>Radio 2 frequency scanner</strong>
+</div>
+<span class="form-message" id="frequencyScan868State">Ready</span>
+</div>
+<p class="platform-note">Adaptive RSSI sweep for unknown 868 MHz transmitters. The scanner revisits every frequency several times, keeps the strongest RSSI seen per bin, then estimates the carrier from the peak region. Repeatedly press the remote throughout the scan.</p>
+<div class="frequency-scan-controls">
+<label class="field">
+<span>Start MHz</span>
+<input id="frequencyScan868Start" max="870" min="867" step="0.025" type="number" value="867.800">
+</label>
+<label class="field">
+<span>End MHz</span>
+<input id="frequencyScan868End" max="870" min="867" step="0.025" type="number" value="868.900">
+</label>
+<label class="field">
+<span>Step MHz</span>
+<select id="frequencyScan868Step">
+<option value="0.050">50 kHz · fast</option>
+<option selected value="0.025">25 kHz · normal</option>
+<option value="0.010">10 kHz · fine</option>
+</select>
+</label>
+<label class="field">
+<span>Listen / point</span>
+<select id="frequencyScan868Dwell">
+<option value="25">25 ms · fast</option>
+<option selected value="35">35 ms · normal</option>
+<option value="60">60 ms · sensitive</option>
+</select>
+</label>
+<label class="field">
+<span>Sweep passes</span>
+<select id="frequencyScan868Passes">
+<option value="2">2 · fast</option>
+<option selected value="4">4 · normal</option>
+<option value="8">8 · burst sensitive</option>
+</select>
+</label>
+<button class="button button-primary" id="frequencyScan868Button" type="button">Scan 868 MHz</button>
+</div>
+<div class="frequency-scan-result frequency-scan-result-expanded">
+<div><span>Peak bin</span><strong id="frequencyScan868BestFrequency">—</strong></div>
+<div><span>Estimated carrier</span><strong id="frequencyScan868EstimatedCarrier">—</strong></div>
+<div><span>Peak RSSI</span><strong id="frequencyScan868BestRssi">—</strong></div>
+<div><span>Noise floor</span><strong id="frequencyScan868NoiseFloor">—</strong></div>
+<div><span>Above noise</span><strong id="frequencyScan868Delta">—</strong></div>
+<div><span>Signal</span><strong class="scan-detection" id="frequencyScan868Detection">—</strong></div>
+<div><span>Samples</span><strong id="frequencyScan868SampleCount">—</strong></div>
+</div>
+<div class="frequency-tune-row">
+<span class="form-message" id="frequencyScan868TuneState"></span>
+<button class="button button-secondary" id="frequencyScan868RestoreButton" type="button">Restore Default</button>
+<button class="button button-secondary" disabled id="frequencyScan868TuneButton" type="button">
+            Tune Radio 2 to detected carrier
+          </button>
+</div>
+<div class="frequency-scan-bars" id="frequencyScan868Bars">
+<span class="platform-note">No scan yet.</span>
+</div>
+</article><div class="system-grid">
+<article class="card system-card">
+<h3>Firmware update</h3>
+<p>Upload the PlatformIO <code>firmware.bin</code>. Only the firmware partition is updated; LittleFS configuration and RF slots remain untouched.</p>
+<label class="field"><span>Firmware file</span><input accept=".bin,application/octet-stream" id="otaFile" type="file"></label>
+<div class="progress-track"><span class="progress-value" id="otaProgress"></span></div>
+<span class="form-message" id="otaMessage"></span>
+<button class="button button-primary" id="otaUploadButton" type="button">Install firmware</button>
+</article>
+<article class="card system-card">
+<h3>Backup</h3>
+<p>Download one backup containing the configuration and all saved RF and RX slots. The file contains WiFi and MQTT credentials; store it securely.</p>
+<a class="button button-secondary button-link" download="" href="/api/system/backup">Download backup</a>
+</article>
+<article class="card system-card">
+<h3>Restore backup</h3>
+<p>Restoring replaces the current configuration and RF and RX slots, then restarts the bridge. Only OpenRF <code>.orfbackup</code> files are accepted.</p>
+<label class="field"><span>Backup file</span><input accept=".orfbackup,application/octet-stream" id="backupFile" type="file"></label>
+<div class="progress-track"><span class="progress-value" id="backupProgress"></span></div>
+<span class="form-message" id="backupMessage"></span>
+<button class="button button-danger" id="backupRestoreButton" type="button">Restore backup</button>
+</article>
+</div><p class="notice">Do not disconnect power during firmware update or backup restore.</p></section><section class="page" id="page-diagnostics"><div class="page-heading"><div><p class="eyebrow">DEVELOPER &amp; RF ANALYSIS</p><h2>Diagnostics</h2></div></div><p class="notice">Inspect RF capture, protocol decisions, receive routing, transmission and system load.</p><article class="card">
+<div class="learn-status-row">
+<div>
+<span class="label">RF capture diagnostics</span>
+<strong>Dual-radio RAW receive path</strong>
+</div>
+<span class="form-message">Live</span>
+</div>
+<p class="platform-note">Diagnostic counters for the two CC1101 RAW capture paths. Use these to verify GDO0 interrupts and frame finalization before Analyzer processing.</p>
+<div class="capture-diag-grid">
+<div class="capture-diag-radio">
+<strong>Radio 1 · 433 MHz</strong>
+<span>GDO0 edges <b id="rf1DiagEdges">—</b></span>
+<span>RAW candidates <b id="rf1DiagCandidates">—</b></span>
+<span>Accepted <b id="rf1DiagAccepted">—</b></span>
+<span>Rejected <b id="rf1DiagRejected">—</b></span>
+<span>Current pulses <b id="rf1DiagPulses">—</b></span>
+</div>
+<div class="capture-diag-radio">
+<strong>Radio 2 · 868 MHz</strong>
+<span>GDO0 edges <b id="rf2DiagEdges">—</b></span>
+<span>RAW candidates <b id="rf2DiagCandidates">—</b></span>
+<span>Accepted <b id="rf2DiagAccepted">—</b></span>
+<span>Rejected <b id="rf2DiagRejected">—</b></span>
+<span>Current pulses <b id="rf2DiagPulses">—</b></span>
+</div>
+</div>
+<details class="capture-finalization-details" open="">
+<summary>Frame finalization diagnostics</summary>
+<div class="capture-finalization-grid">
+<div class="capture-finalization-radio">
+<strong>Radio 1 · 433 MHz</strong>
+<span>Finalize reason <b id="rf1DiagFinalizeReason">—</b></span>
+<span>Last finalized <b id="rf1DiagLastFrame">—</b></span>
+<span>Validation <b id="rf1DiagValidation">—</b></span>
+<span>Gap / timeout / partial / buffer <b id="rf1DiagFinalizeCounts">—</b></span>
+<span>Short-gap resets <b id="rf1DiagShortResets">—</b></span>
+<span>Ignored while ready <b id="rf1DiagIgnoredReady">—</b></span>
+<span>Glitch edges <b id="rf1DiagGlitches">—</b></span>
+<span>Frame ready / pending age <b id="rf1DiagPending">—</b></span>
+</div>
+<div class="capture-finalization-radio">
+<strong>Radio 2 · 868 MHz</strong>
+<span>Finalize reason <b id="rf2DiagFinalizeReason">—</b></span>
+<span>Last finalized <b id="rf2DiagLastFrame">—</b></span>
+<span>Validation <b id="rf2DiagValidation">—</b></span>
+<span>Gap / timeout / partial / buffer <b id="rf2DiagFinalizeCounts">—</b></span>
+<span>Short-gap resets <b id="rf2DiagShortResets">—</b></span>
+<span>Ignored while ready <b id="rf2DiagIgnoredReady">—</b></span>
+<span>Glitch edges <b id="rf2DiagGlitches">—</b></span>
+<span>Frame ready / pending age <b id="rf2DiagPending">—</b></span>
+</div>
+</div>
+<p class="platform-note">Diagnostic only: these counters do not change RF capture thresholds or timing.</p>
+</details>
+</article><article class="card protocol-diagnostics-card">
+<div class="learn-status-row">
+<div>
+<span class="label">V2 Protocol Diagnostics</span>
+<strong>Protocol Engine diagnostics</strong>
+</div>
+<span class="form-message" id="protocolDiagState">Waiting for RF</span>
+</div>
+<p class="platform-note">Live diagnostics from the finalized FULL RAW capture through the V2 Known Protocol Library, Protocol Engine, normalized event and authoritative routing path.</p>
+<div class="capture-diag-grid">
+<div class="capture-diag-radio">
+<strong>Capture</strong>
+<span>Radio <b id="protocolDiagRadio">—</b></span>
+<span>Age <b id="protocolDiagAge">—</b></span>
+<span>RAW <b id="protocolDiagRaw">—</b></span>
+<span>Frequency <b id="protocolDiagFrequency">—</b></span>
+<span>RSSI <b id="protocolDiagRssi">—</b></span>
+</div>
+<div class="capture-diag-radio"><strong>Known Protocol Library</strong><span>Current capture decoder <b id="protocolDiagV2">—</b></span><span>Decoder result <b id="protocolDiagV2Result">—</b></span><span>Last recognized <b id="protocolLastKnownProtocol">—</b></span><span>Last code <b id="protocolLastKnownCode">—</b></span><span>Last source <b id="protocolLastKnownSource">—</b></span><span>Last seen <b id="protocolLastKnownAge">—</b></span><span>Registry <b id="protocolDiagRegistry">—</b></span><span>MATCH / NO_MATCH <b id="protocolDiagCounts">0 / 0</b></span></div>
+</div>
+<div class="capture-diag-grid protocol-engine-decision-grid">
+<div class="capture-diag-radio">
+<strong>Protocol Engine decision</strong>
+<span>State <b id="protocolEngineDecision">—</b></span>
+<span>Matched decoders <b id="protocolEngineMatched">—</b></span>
+<span>Selected candidate <b id="protocolEngineSelected">—</b></span>
+<span>Candidates <b id="protocolEngineCandidates">—</b></span>
+</div>
+<div class="capture-diag-radio">
+<strong>Decision counters since boot</strong>
+<span>UNKNOWN <b id="protocolEngineUnknownCount">0</b></span>
+<span>KNOWN <b id="protocolEngineKnownCount">0</b></span>
+<span>AMBIGUOUS <b id="protocolEngineAmbiguousCount">0</b></span>
+<span>Rule <b>0 → UNKNOWN · 1 → KNOWN · 2+ → AMBIGUOUS</b></span>
+</div>
+</div>
+<p class="platform-note">The engine classifies each finalized capture as UNKNOWN, KNOWN or AMBIGUOUS. Only one confident approved KNOWN result can create a normalized event and enter the V2 action path.</p>
+<div class="capture-diag-grid protocol-engine-decision-grid">
+<div class="capture-diag-radio">
+<strong>Normalized RF Event</strong>
+<span>Available <b id="protocolNormalizedAvailable">NO</b></span>
+<span>Protocol <b id="protocolNormalizedProtocol">—</b></span>
+<span>Code <b id="protocolNormalizedCode">—</b></span>
+<span>Symbols <b id="protocolNormalizedSymbols">—</b></span>
+<span>Repeats <b id="protocolNormalizedRepeats">—</b></span>
+</div>
+<div class="capture-diag-radio">
+<strong>Normalized capture metadata</strong>
+<span>Radio <b id="protocolNormalizedRadio">—</b></span>
+<span>Frequency <b id="protocolNormalizedFrequency">—</b></span>
+<span>RSSI <b id="protocolNormalizedRssi">—</b></span>
+<span>RAW source <b id="protocolNormalizedRaw">—</b></span>
+<span>Events since boot <b id="protocolNormalizedCount">0</b></span>
+</div>
+</div>
+<p class="platform-note">A normalized event is produced only for one unambiguous KNOWN result and carries the protocol, code, radio, frequency, RSSI and RAW-source metadata used downstream.</p>
+<div class="capture-diag-grid protocol-engine-decision-grid">
+<div class="capture-diag-radio">
+<strong>Normalized event burst collapse diagnostics</strong>
+<span>Gate result <b id="protocolDedupState">—</b></span>
+<span>Window <b id="protocolDedupWindow">300 ms</b></span>
+<span>Delta from previous same event <b id="protocolDedupDelta">—</b></span>
+<span>Collapsed in current burst <b id="protocolDedupBurst">0</b></span>
+</div>
+<div class="capture-diag-radio">
+<strong>Event counters since boot</strong>
+<span>Normalized inputs <b id="protocolDedupInputCount">0</b></span>
+<span>Logical events <b id="protocolDedupLogicalCount">0</b></span>
+<span>Collapsed duplicates <b id="protocolDedupCollapsedCount">0</b></span>
+<span>Key <b>protocol + code + radio</b></span>
+</div>
+</div>
+<p class="platform-note">Repeated events with the same protocol, code and radio are grouped within the displayed window. NVKP01 uses 400 ms; other known protocols use 300 ms.</p>
 
-    <section id="page-dashboard" class="page active">
-      <div class="page-heading"><div><p class="eyebrow">SYSTEM OVERVIEW</p><h2>Dashboard</h2></div><button id="refreshStatusButton" class="button button-secondary" type="button">Refresh</button></div>
-      <div class="status-grid">
-        <article class="card status-card"><span class="label">Status</span><strong id="status">Loading...</strong></article>
-        <article class="card status-card"><span class="label">Firmware</span><strong id="firmware">-</strong></article>
-        <article class="card status-card"><span class="label">IP address</span><strong id="ip">-</strong></article>
-        <article class="card status-card"><span class="label">WiFi mode</span><strong id="wifiMode">-</strong></article>
-        <article class="card status-card"><span class="label">Radio chip</span><strong id="radioChip">-</strong></article>
-        <article class="card status-card"><span class="label">Radio mode</span><strong id="radioMode">-</strong></article>
-        <article class="card status-card"><span class="label">Frequency</span><strong id="radioFrequency">-</strong></article>
-        <article class="card status-card"><span class="label">RSSI</span><strong id="radioRssi">-</strong></article>
-        <article class="card status-card"><span class="label">MQTT</span><strong id="mqttStatus">-</strong></article>
-        <article class="card status-card"><span class="label">Last RAW frame</span><strong id="rawPulseCount">Waiting...</strong></article>
-        <article class="card status-card"><span class="label">Frame duration</span><strong id="rawDuration">-</strong></article>
-        <article class="card status-card"><span class="label">Frame RSSI</span><strong id="rawRssi">-</strong></article>
-        <article class="card status-card"><span class="label">Free heap</span><strong id="freeHeap">-</strong></article>
-        <article class="card status-card"><span class="label">Heap fragmentation</span><strong id="heapFragmentation">-</strong></article>
-        <article class="card status-card"><span class="label">Uptime</span><strong id="uptime">-</strong></article>
-      </div>
-      <article class="card raw-card"><div class="raw-heading"><div><span class="label">LATEST CAPTURE</span><strong id="rawSequence">No signal received yet</strong></div><span id="rawAge" class="raw-age">-</span></div><pre id="rawPreview" class="raw-preview">Press a 433 MHz remote button near the receiver.</pre></article>
-    </section>
-
-    <section id="page-learn" class="page">
-      <div class="page-heading"><div><p class="eyebrow">RF TRANSMIT CAPTURE</p><h2>RF Learn</h2></div></div>
-      <article class="card learn-card">
-        <div class="learn-status-row"><div><span class="label">Learn state</span><strong id="learnState">IDLE</strong></div><span id="learnBadge" class="badge badge-loading">Idle</span></div>
-        <p id="learnMessage" class="learn-message">Capture a remote button for later transmission from an RF slot.</p>
-        <div class="button-row">
-          <button id="learnStartButton" class="button button-primary" type="button">Start RF Learn</button>
-          <button id="learnAcceptButton" class="button button-success" type="button" disabled>Accept to RAM</button>
-          <button id="learnSaveButton" class="button button-success" type="button" disabled>Save to Slot</button>
-          <button id="learnTestSendButton" class="button button-primary" type="button" disabled>Test Send</button>
-          <button id="learnDiscardButton" class="button button-danger" type="button" disabled>Discard</button>
-        </div>
-      </article>
-      <div class="status-grid learn-metrics">
-        <article class="card status-card"><span class="label">Pulse count</span><strong id="learnPulseCount">-</strong></article>
-        <article class="card status-card"><span class="label">Duration</span><strong id="learnDuration">-</strong></article>
-        <article class="card status-card"><span class="label">RSSI</span><strong id="learnRssi">-</strong></article>
-        <article class="card status-card"><span class="label">Noise floor</span><strong id="learnNoiseFloor">-</strong></article>
-        <article class="card status-card"><span class="label">Rejected</span><strong id="learnRejected">0</strong></article>
-        <article class="card status-card"><span class="label">Last reject</span><strong id="learnRejectReason">-</strong></article>
-      </div>
-      <article class="card raw-card"><div class="raw-heading"><div><span class="label">LEARN PREVIEW</span><strong id="learnPreviewTitle">No preview</strong></div></div><pre id="learnRawPreview" class="raw-preview">The captured signal will appear here before it is accepted.</pre></article>
-      <p class="notice">RF Learn records a signal for transmission. RX Slots are used separately for RF-to-Home Assistant control.</p>
-    </section>
-
-    <section id="page-settings" class="page">
-      <div class="page-heading"><div><p class="eyebrow">DEVICE CONFIGURATION</p><h2>Settings</h2></div></div>
-      <form id="settingsForm" class="card form-card">
-        <div class="form-section"><h3>Device</h3><label class="field"><span>Hostname</span><input id="hostname" type="text" maxlength="32" value="OpenRF-Platform" required><small>1–32 characters.</small></label><label class="field"><span>Replay count</span><input id="replayCount" type="number" min="1" max="10" value="1" required><small>Number of transmissions when an RF slot is sent.</small></label></div><div class="form-section"><h3>WiFi client</h3><p>Optional. The setup access point is disabled automatically after a successful connection. It remains available only when WiFi is not configured or the connection fails.</p><label class="field"><span>WiFi SSID</span><input id="wifiSsid" type="text" maxlength="32"></label><label class="field"><span>WiFi password</span><input id="wifiPassword" type="password" maxlength="64" placeholder="Leave empty to keep saved password"><small id="wifiPasswordState">No WiFi password information loaded.</small></label></div>
-        <div class="form-section"><h3>Radio frequency</h3><label class="field"><span>CC1101 operating band</span><select id="radioBand"><option value="433">433 MHz (433.920 MHz)</option><option value="868">868 MHz (868.350 MHz)</option></select><small>Changing the band requires a restart. For reliable range, use a CC1101 module and antenna designed or tuned for the selected frequency; replacing the module/antenna may be necessary.</small></label></div>
-        <div class="form-section"><div class="toggle-row"><div><h3>MQTT</h3><p>Enable communication with MQTT and Home Assistant.</p></div><label class="switch"><input id="mqttEnabled" type="checkbox"><span class="switch-slider"></span></label></div><div id="mqttFields"><label class="field"><span>MQTT host</span><input id="mqttHost" type="text" maxlength="64"></label><label class="field"><span>MQTT port</span><input id="mqttPort" type="number" min="1" max="65535"></label><label class="field"><span>MQTT username</span><input id="mqttUser" type="text" maxlength="64"></label><label class="field"><span>MQTT password</span><input id="mqttPassword" type="password" maxlength="128" placeholder="Leave empty to keep saved password"><small id="passwordState">No password information loaded.</small></label><div class="toggle-row discovery-toggle"><div><h3>Home Assistant Auto Discovery</h3><p>Publish saved RF slots and diagnostic sensors automatically when MQTT connects.</p></div><label class="switch"><input id="homeAssistantDiscovery" type="checkbox" checked><span class="switch-slider"></span></label></div></div></div>
-        <div class="form-actions"><span id="saveMessage" class="form-message"></span><button id="saveButton" class="button button-primary" type="submit">Save settings</button></div>
-      </form>
-    </section>
-
-    <section id="page-slots" class="page">
-      <div class="page-heading"><div><p class="eyebrow">RAW RF MEMORY</p><h2>RF Slots</h2></div><button id="refreshSlotsButton" class="button button-secondary" type="button">Refresh</button></div>
-      <div class="card slot-summary"><strong id="slotUsage">Loading slots...</strong><span id="slotMessage" class="form-message"></span></div>
-      <div id="slotGrid" class="slot-grid"></div>
-    </section>
 
 
-    <section id="page-rxslots" class="page">
-      <div class="page-heading"><div><p class="eyebrow">RF TO HOME ASSISTANT</p><h2>RX Slots</h2></div><button id="refreshRxSlotsButton" class="button button-secondary" type="button">Refresh</button></div>
-      <div class="card slot-summary"><strong id="rxSlotUsage">Loading RX slots...</strong><span id="rxSlotMessage" class="form-message"></span></div>
 
-      <article class="card rx-learn-filter-card">
-        <div class="analyzer-filter-heading">
-          <div>
-            <span class="label">RX Slot Learn filter</span>
-            <strong>Minimum signal strength</strong>
-          </div>
-          <span id="rxLearnRssiSaveState" class="form-message">Saved automatically</span>
-        </div>
-        <label class="analyzer-control">
-          <span>Minimum RSSI <strong id="rxLearnRssiValue">-75 dBm</strong></span>
-          <input id="rxLearnRssiThreshold" type="range" min="-100" max="-20" step="1" value="-75">
-        </label>
-        <div class="analyzer-slider-scale"><span>-100 dBm · sensitive</span><span>-20 dBm · nearby only</span></div>
-        <p class="learn-message">During RX Slot learning, the signal must reach this RSSI threshold <strong>and</strong> remain at least 6 dB above the measured noise floor. Weaker captures are ignored and learning continues automatically.</p>
-      </article>
+<details class="protocol-decode-detail">
+<summary>NVKP01 Kinetic module diagnostics</summary>
+<p class="platform-note">NVKP01 is an RX-only known protocol. Structural measurements explain acceptance and rejection.</p>
+<div class="capture-diag-grid">
+<div class="capture-diag-radio">
+<strong>NVKP01 structural result</strong>
+<span>Result <b id="protocolNvkpResult">—</b></span>
+<span>Reject reason <b id="protocolNvkpReject">—</b></span>
+<span>Marker pairs <b id="protocolNvkpMarkers">—</b></span>
+<span>Sync LOW pulses <b id="protocolNvkpSync">—</b></span>
+<span>Full leader <b id="protocolNvkpLeader">—</b></span>
+</div>
+<div class="capture-diag-radio">
+<strong>Module / capture</strong>
+<span>Capture envelope <b id="protocolNvkpEnvelope">—</b></span>
+<span>Alternating polarity <b id="protocolNvkpAlternating">—</b></span>
+<span>Normalized key <b id="protocolNvkpCode">—</b></span>
+<span>Repeats/markers <b id="protocolNvkpRepeats">—</b></span>
+<span>Reject counters <b id="protocolNvkpRejectCounts">—</b></span>
+</div>
+</div>
+</details>
+<details class="protocol-decode-detail">
+<summary>HT12E module diagnostics</summary>
+<p class="platform-note">HT12E is an approved Known Protocol module. These fields expose pilot, sync, timing, decoded address/data and repeat validation for troubleshooting.</p>
+<div class="capture-diag-grid">
+<div class="capture-diag-radio">
+<strong>HT12E structural result</strong>
+<span>Result <b id="protocolHt12eResult">—</b></span>
+<span>Reject reason <b id="protocolHt12eReject">—</b></span>
+<span>Matching / valid / candidates <b id="protocolHt12eWords">—</b></span>
+<span>Estimated T <b id="protocolHt12eT">—</b></span>
+<span>Timing ranges <b id="protocolHt12eTiming">—</b></span>
+</div>
+<div class="capture-diag-radio">
+<strong>Decoded word</strong>
+<span>12-bit code <b id="protocolHt12eCode">—</b></span>
+<span>Address / data <b id="protocolHt12eAddressData">—</b></span>
+<span>Repeats <b id="protocolHt12eRepeats">—</b></span>
+<span>Reject counters E/P/S/T/R <b id="protocolHt12eRejectCounts">—</b></span>
+</div>
+</div>
+</details>
 
-      <p class="notice">Press Capture on an RX slot, then press the remote button once. The page completes automatically after saving. A matched signal publishes both a Home Assistant trigger and a visible binary sensor pulse. The old generic 700 ms RX Slot lockout is disabled on ESP32-S3.</p>
-      <div id="rxSlotGrid" class="slot-grid"></div>
-    </section>
-
-
-    <section id="page-analyzer" class="page">
-      <div class="page-heading">
-        <div><p class="eyebrow">LIVE RF DIAGNOSTICS</p><h2>RF Analyzer</h2></div>
-        <div class="button-row analyzer-heading-actions">
-          <label class="analyzer-power-control" title="Enable or disable RF Analyzer">
-            <span class="analyzer-power-title">RF Analyzer</span>
-            <span class="analyzer-segmented-switch">
-              <input id="analyzerDeveloperMode" type="checkbox" aria-label="RF Analyzer power">
-              <span class="analyzer-segment analyzer-segment-off">◉ OFF</span>
-              <span class="analyzer-segment analyzer-segment-on">⌁ ON</span>
-            </span>
-            <b id="developerModeState" class="sr-only">OFF</b>
-          </label>
-          <button id="copyAnalyzerButton" class="button button-secondary" type="button">Copy report</button>
-          <button id="refreshAnalyzerButton" class="button button-secondary" type="button">Refresh</button>
-        </div>
-      </div>
-      <div id="developerExclusiveWarning" class="developer-exclusive-warning" hidden></div>
-      <article class="card learn-card">
-        <div class="learn-status-row"><div><span class="label">Latest RF event</span><strong id="analyzerSequence">Waiting for signal</strong></div><span id="analyzerBadge" class="badge badge-loading">Idle</span></div>
-        <p id="analyzerModeMessage" class="learn-message analyzer-mode-message"><strong>RF Analyzer is disabled.</strong> The gateway remains fully operational. Enable RF Analyzer for live RF diagnostics; on ESP32-S3 it runs in non-exclusive mode alongside RX Slots, MQTT and Home Assistant.</p>
-      </article>
-
-      <article class="card analyzer-filter-card developer-only" hidden>
-        <div class="analyzer-filter-heading">
-          <div><span class="label">Developer controls</span><strong>Analyzer v2 sensitivity and classification</strong></div>
-          <span id="analyzerRssiSaveState" class="form-message">Saved automatically</span>
-        </div>
-        <label class="analyzer-control"><span>RSSI threshold <strong id="analyzerRssiThresholdValue">-75 dBm</strong></span><input id="analyzerRssiThreshold" type="range" min="-100" max="-20" step="1" value="-75"></label>
-        <div class="analyzer-slider-scale"><span>-100 dBm · sensitive</span><span>-20 dBm · nearby only</span></div>
-        <div class="analyzer-controls-grid">
-          <label class="analyzer-control developer-setting"><span>Minimum pulse count <strong id="analyzerMinPulsesValue">20</strong></span><input id="analyzerMinPulses" type="range" min="2" max="100" step="1" value="20"></label>
-          <label class="analyzer-control developer-setting"><span>Minimum duration <strong id="analyzerMinDurationValue">5.0 ms</strong></span><input id="analyzerMinDuration" type="range" min="500" max="100000" step="500" value="5000"></label>
-          <label class="analyzer-control developer-setting"><span>Similarity <strong id="analyzerSimilarityValue">82%</strong></span><input id="analyzerSimilarity" type="range" min="50" max="100" step="1" value="82"></label>
-          <label class="analyzer-control developer-setting"><span>Required occurrences <strong id="analyzerOccurrencesValue">3</strong></span><input id="analyzerOccurrences" type="range" min="1" max="10" step="1" value="3"></label>
-          <label class="analyzer-control developer-setting"><span>Alternation tolerance <strong id="analyzerAlternationValue">90%</strong></span><input id="analyzerAlternation" type="range" min="50" max="100" step="1" value="90"></label>
-        </div>
-        <div class="analyzer-toggle-row">
-          <label class="toggle developer-setting"><input id="analyzerShowRejected" type="checkbox" checked><span>Show structured rejected signals</span></label>
-          <label class="toggle"><input id="analyzerFreezeCandidate" type="checkbox"><span>Pause candidate updates</span></label>
-        </div>
-        <div class="analyzer-live-grid">
-          <div><span class="label">Current RSSI</span><strong id="analyzerCurrentRssi">-</strong></div>
-          <div><span class="label">Peak RSSI</span><strong id="analyzerPeakRssi">-</strong></div>
-          <div><span class="label">Filtered as weak</span><strong id="analyzerWeakRssi">0</strong></div>
-        </div>
-        <p class="learn-message analyzer-filter-note">ESP32-S3 non-exclusive Analyzer: full RF diagnostics can run while RX Slots, MQTT, Home Assistant and normal gateway services remain active.</p>
-      </article>
-
-      <article class="card last-candidate-card developer-only" hidden>
-        <div class="raw-heading"><div><span class="label">LAST CANDIDATE · BEFORE ANALYZER FILTERS</span><strong id="candidateSequence">Waiting for candidate</strong></div><span id="candidateAge" class="raw-age">-</span></div>
-        <div class="status-grid candidate-grid">
-          <div><span class="label">RSSI</span><strong id="candidateRssi">-</strong></div>
-          <div><span class="label">Pulse count</span><strong id="candidatePulseCount">-</strong></div>
-          <div><span class="label">Duration</span><strong id="candidateDuration">-</strong></div>
-          <div><span class="label">Reject reason</span><strong id="candidateRejectReason">-</strong></div>
-        </div>
-        <div id="candidateDeveloperMetrics" class="developer-panel">
-          <div class="status-grid candidate-grid">
-            <div><span class="label">Alternation</span><strong id="candidateAlternation">-</strong></div>
-            <div><span class="label">Same-sign pairs</span><strong id="candidateSamePairs">-</strong></div>
-            <div><span class="label">Longest run</span><strong id="candidateLongestRun">-</strong></div>
-            <div><span class="label">Normalized pulses</span><strong id="candidateNormalizedCount">-</strong></div>
-          </div>
-          <pre id="candidateNormalizedRaw" class="raw-preview candidate-preview">Normalized RAW will appear here.</pre>
-        </div>
-        <pre id="candidateRaw" class="raw-preview candidate-preview">Every Candidate will appear here, including weak and rejected captures.</pre>
-      </article>
-
-      <div class="status-grid learn-metrics">
-        <article class="card status-card"><span class="label">Frequency</span><strong id="analyzerFrequency">-</strong></article>
-        <article class="card status-card"><span class="label">RSSI</span><strong id="analyzerRssi">-</strong></article>
-        <article class="card status-card"><span class="label">Protocol</span><strong id="analyzerProtocol">-</strong></article>
-        <article class="card status-card"><span class="label">Encoding</span><strong id="analyzerEncoding">-</strong></article>
-        <article class="card status-card"><span class="label">Symbols / bits</span><strong id="analyzerBits">-</strong></article>
-        <article class="card status-card"><span class="label">Base pulse</span><strong id="analyzerBasePulse">-</strong></article>
-        <article class="card status-card"><span class="label">Frame count</span><strong id="analyzerFrameCount">-</strong></article>
-        <article class="card status-card"><span class="label">Quality</span><strong id="analyzerQuality">-</strong></article>
-        <article class="card status-card"><span class="label">Pulse count</span><strong id="analyzerPulseCount">-</strong></article>
-        <article class="card status-card"><span class="label">Duration</span><strong id="analyzerDuration">-</strong></article>
-        <article class="card status-card"><span class="label">Code</span><strong id="analyzerCode">-</strong></article>
-        <article class="card status-card"><span class="label">Pulse classes</span><strong id="analyzerClasses">-</strong></article>
-      </div>
-      <div class="analyzer-stat-grid">
-        <article class="card status-card"><span class="label">Candidates</span><strong id="analyzerCandidates">0</strong></article>
-        <article class="card status-card"><span class="label">Accepted</span><strong id="analyzerAccepted">0</strong></article>
-        <article class="card status-card"><span class="label">Rejected</span><strong id="analyzerRejected">0</strong></article>
-        <article class="card status-card"><span class="label">Decoded</span><strong id="analyzerDecoded">0</strong></article>
-        <article class="card status-card"><span class="label">Unknown</span><strong id="analyzerUnknown">0</strong></article>
-      </div>
-      <article class="card raw-card"><div class="raw-heading"><div><span class="label">SIGNAL REPORT / RAW EXPORT</span><strong id="analyzerDetailTitle">No frame analyzed yet</strong></div><span id="analyzerAge" class="raw-age">-</span></div><pre id="analyzerBitstream" class="raw-preview">Press a remote button near the CC1101 receiver.</pre></article>
-    </section>
-
-    <section id="page-system" class="page">
-      <div class="page-heading"><div><p class="eyebrow">MAINTENANCE</p><h2>System</h2>
-      <article class="card memory-diagnostics-card">
-        <div class="analyzer-filter-heading">
-          <div><span class="label">ESP32-S3 memory</span><strong>N16R8 hardware diagnostics</strong></div>
-          <span id="memoryDiagState" class="form-message">Loading...</span>
-        </div>
-        <div class="memory-diagnostics-grid">
-          <div><span>Flash total</span><strong id="memoryFlashTotal">—</strong></div>
-          <div><span>PSRAM total</span><strong id="memoryPsramTotal">—</strong></div>
-          <div><span>PSRAM free</span><strong id="memoryPsramFree">—</strong></div>
-          <div><span>Internal heap total</span><strong id="memoryHeapTotal">—</strong></div>
-          <div><span>Internal heap free</span><strong id="memoryHeapFree">—</strong></div>
-          <div><span>OpenRF PSRAM buffers</span><strong id="memoryOpenrfPsram">—</strong></div>
-          <div><span>Analyzer PSRAM stores</span><strong id="memoryAnalyzerPsram">—</strong></div>
-        </div>
-      </article>
-</div></div>
-      <div class="system-grid">
-        <article class="card system-card">
-          <h3>Firmware update</h3>
-          <p>Upload the PlatformIO <code>firmware.bin</code>. Only the firmware partition is updated; LittleFS configuration and RF slots remain untouched.</p>
-          <label class="field"><span>Firmware file</span><input id="otaFile" type="file" accept=".bin,application/octet-stream"></label>
-          <div class="progress-track"><span id="otaProgress" class="progress-value"></span></div>
-          <span id="otaMessage" class="form-message"></span>
-          <button id="otaUploadButton" class="button button-primary" type="button">Install firmware</button>
-        </article>
-
-        <article class="card system-card">
-          <h3>Backup</h3>
-          <p>Download one backup containing the configuration and all saved TX slots. The file contains WiFi and MQTT credentials; store it securely.</p>
-          <a class="button button-secondary button-link" href="/api/system/backup" download>Download backup</a>
-        </article>
-
-        <article class="card system-card">
-          <h3>Restore backup</h3>
-          <p>Restoring replaces the current configuration and TX slots, then restarts the bridge. Only OpenRF <code>.orfbackup</code> files are accepted.</p>
-          <label class="field"><span>Backup file</span><input id="backupFile" type="file" accept=".orfbackup,application/octet-stream"></label>
-          <div class="progress-track"><span id="backupProgress" class="progress-value"></span></div>
-          <span id="backupMessage" class="form-message"></span>
-          <button id="backupRestoreButton" class="button button-danger" type="button">Restore backup</button>
-        </article>
-      </div>
-      <p class="notice">Do not disconnect power during firmware update or backup restore.</p>
-    </section>
-
-    <section id="page-about" class="page">
-      <div class="page-heading"><div><p class="eyebrow">PROJECT INFORMATION</p><h2>About</h2></div></div>
-      <article class="card about-card about-card-modern">
-        <div class="about-main">
-          <div class="about-brand">
-            <img class="about-logo" src="/logo.svg" alt="OpenRF Platform logo">
-            <div>
-              <p class="eyebrow">OPEN SOURCE RF GATEWAY &amp; ANALYZER</p>
-              <h2>OpenRF Platform</h2>
-            </div>
-          </div>
-          <p>A compact and powerful RF gateway and analyzer for <strong>ESP32-S3</strong> and CC1101. It provides precise RAW Learn/Replay, protocol-aware RX events, RF Analyzer, WebUI, REST API, MQTT, Home Assistant Discovery, OTA updates and configuration backup/restore.</p>
-          <p class="platform-note"><strong>ESP32-S3 port:</strong> the complete v1.2.0 feature set with dual-core operation, PSRAM-aware memory handling and non-exclusive RF Analyzer. The second CC1101 and LoRa remain outside this port.</p>
-        </div>
-        <div class="about-grid about-grid-modern">
-          <div><span class="about-icon">●</span><span><span class="label">Created by</span><strong>Kocsis Krisztián</strong></span></div>
-          <div><span class="about-icon">▣</span><span><span class="label">Platform</span><strong>ESP32-S3 N16R8</strong><small>16 MB Flash · 8 MB PSRAM</small></span></div>
-          <div><span class="about-icon">⌁</span><span><span class="label">RF frontend</span><strong>CC1101</strong><small>Current port: 1 active radio</small></span></div>
-          <div><span class="about-icon">&lt;/&gt;</span><span><span class="label">Firmware</span><strong>v1.2.0 – ESP32-S3</strong><small>Stable port</small></span></div>
-          <div><span class="about-icon">◌</span><span><span class="label">Architecture &amp; development support</span><strong>ChatGPT (OpenAI)</strong></span></div>
-          <div><span class="about-icon">◇</span><span><span class="label">License</span><strong>MIT</strong></span></div>
-        </div>
-      </article>
-    </section>
-  </main>
-
-  <div id="slotSaveModal" class="modal-backdrop" aria-hidden="true">
-    <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="slotSaveTitle">
-      <div class="modal-heading">
-        <div><p class="eyebrow">SAFE SLOT SAVE</p><h3 id="slotSaveTitle">Save learned signal</h3></div>
-      </div>
-      <label class="field"><span>Destination slot</span><select id="slotSaveSelect"></select></label>
-      <label class="field"><span>Slot name</span><input id="slotSaveName" type="text" maxlength="32"></label>
-      <p id="slotSaveWarning" class="slot-save-warning"></p>
-      <div class="modal-actions">
-        <button id="slotSaveCancel" class="button button-secondary" type="button">Cancel</button>
-        <button id="slotSaveConfirm" class="button button-success" type="button">Save to slot</button>
-      </div>
-    </section>
-  </div>
-  <script src="/app.js"></script>
+<details class="protocol-decode-detail">
+<summary>EV1527 decoder decision diagnostics</summary>
+<p class="platform-note">Live EV1527 decoder measurements and reject reasons from the current V2 decoder.</p>
+<div class="capture-diag-grid">
+<div class="capture-diag-radio">
+<strong>Decision</strong>
+<span>Reject reason <b id="protocolEvRejectReason">—</b></span>
+<span>Decoded diagnostic code <b id="protocolEvDecodedCode">—</b></span>
+<span>Frames <b id="protocolEvFrames">—</b></span>
+<span>Frame indexes <b id="protocolEvFrameIndexes">—</b></span>
+<span>Address check <b id="protocolEvAddressCheck">—</b></span>
+<span>Command check <b id="protocolEvCommandCheck">—</b></span>
+</div>
+<div class="capture-diag-radio">
+<strong>Timing measurements</strong>
+<span>Estimated T <b id="protocolEvBaseT">—</b></span>
+<span>Short pulses <b id="protocolEvShort">—</b></span>
+<span>Long pulses <b id="protocolEvLong">—</b></span>
+<span>Long / short ratio <b id="protocolEvRatio">—</b></span>
+<span>Sync LOW <b id="protocolEvSync">—</b></span>
+<span>Repeats <b id="protocolEvRepeats">—</b></span>
+<span>Repeat timing deviation <b id="protocolEvRepeatDeviation">—</b></span>
+</div>
+</div>
+<div class="protocol-reject-summary">
+<strong>Reject counters since boot</strong>
+<span id="protocolEvRejectCounts">No rejects recorded yet</span>
+</div>
+</details>
+<details class="protocol-decode-detail">
+<summary>PT2262 / Tri-State decoder decision diagnostics</summary>
+<p class="platform-note">Live PT2262 / Tri-State decoder measurements and reject reasons from the current V2 decoder.</p>
+<div class="capture-diag-grid">
+<div class="capture-diag-radio">
+<strong>Decision</strong>
+<span>Result <b id="protocolPtResult">—</b></span>
+<span>Reject reason <b id="protocolPtRejectReason">—</b></span>
+<span>Decoded diagnostic code <b id="protocolPtDecodedCode">—</b></span>
+<span>Frames <b id="protocolPtFrames">—</b></span>
+<span>Frame indexes <b id="protocolPtFrameIndexes">—</b></span>
+<span>Tri-state symbols <b id="protocolPtTrits">—</b></span>
+</div>
+<div class="capture-diag-radio">
+<strong>Timing measurements</strong>
+<span>Estimated T <b id="protocolPtBaseT">—</b></span>
+<span>Short pulses <b id="protocolPtShort">—</b></span>
+<span>Long pulses <b id="protocolPtLong">—</b></span>
+<span>Long / short ratio <b id="protocolPtRatio">—</b></span>
+<span>Sync LOW <b id="protocolPtSync">—</b></span>
+<span>Repeats <b id="protocolPtRepeats">—</b></span>
+<span>Repeat timing deviation <b id="protocolPtRepeatDeviation">—</b></span>
+</div>
+</div>
+<div class="protocol-reject-summary">
+<strong>PT2262 reject counters since boot</strong>
+<span id="protocolPtRejectCounts">No rejects recorded yet</span>
+</div>
+</details>
+<div class="capture-diag-radio diagnostics-block">
+<h3>V2-only protocol routing</h3>
+<p>EV1527/Princeton, PT2262/Tri-State, HT12E and NVKP01 own known protocol traffic. Only a true V2 UNKNOWN may continue to the Learned RAW matcher; AMBIGUOUS remains non-actionable.</p>
+<span>Last route <b id="protocolV2Route">V2_FIRST_READY</b></span>
+<span>Boot counters <b id="protocolV2RouteCounts">V2 emit 0 · duplicates suppressed 0 · NVKP confirm waits 0 · unknown/no action 0</b></span>
+</div>
+<div class="capture-diag-radio diagnostics-block">
+<h3>Learned RAW matcher</h3>
+<p>UNKNOWN receive matching. It compares V2-UNKNOWN captures with bidirectional RF Slots using polarity, normalized timing and repeat-reduced RAW signatures.</p>
+<span>Last result <b id="rawMatcherState">IDLE</b></span>
+<span>Best candidate / similarity <b id="rawMatcherMatch">—</b></span>
+<span>Timing / count / polarity <b id="rawMatcherScores">—</b></span>
+<span>Learned / incoming / compared pulses <b id="rawMatcherPulses">—</b></span>
+<span>Repeat reduction <b id="rawMatcherRepeat">—</b></span>
+<span>Boot counters <b id="rawMatcherCounts">matches 0 · no match 0 · duplicates 0</b></span>
+</div>
+<span class="form-message success" id="protocolV2AuthoritativeState">V2-ONLY ACTIVE · Learned RAW fallback enabled</span>
+</article><article class="card"><h3>Queue and memory diagnostics</h3>
+<div class="status-grid"><article class="card status-card"><span class="label">Free heap</span><strong id="freeHeap">-</strong></article>
+<article class="card status-card"><span class="label">Heap fragmentation</span><strong id="heapFragmentation">-</strong></article>
+<div class="card status-card"><span class="label">RF event queue depth</span><strong id="eventQueueDepth">—</strong></div><div class="card status-card"><span class="label">Processed RF events</span><strong id="eventProcessed">—</strong></div><div class="card status-card"><span class="label">Dropped RF events</span><strong id="eventDropped">—</strong></div><article class="card status-card"><span class="label">Radio chip</span><strong id="radioChip">-</strong></article>
+<article class="card status-card"><span class="label">Radio mode</span><strong id="radioMode">-</strong></article>
+<article class="card status-card"><span class="label">Frequency</span><strong id="radioFrequency">-</strong></article>
+<article class="card status-card"><span class="label">RSSI</span><strong id="radioRssi">-</strong></article>
+</div></article><article class="card status-card">
+<div class="raw-heading"><div><span class="label">PROTOCOL TX</span><strong>Last protocol transmission</strong></div><span class="raw-age" id="rxV2TxResult">N/A</span></div>
+<div class="status-grid candidate-grid">
+<div><span class="label">Protocol / code</span><strong id="rxV2TxProtocol">—</strong></div>
+<div><span class="label">Radio / frequency</span><strong id="rxV2TxRadio">—</strong></div>
+<div><span class="label">Protocol repeats</span><strong id="rxV2TxRepeats">—</strong></div>
+<div><span class="label">Age / failure</span><strong id="rxV2TxAge">—</strong></div>
+</div>
+<p class="learn-message">EV1527/Princeton, PT2262/Tri-State and HT12E transmit through the modular V2-native TX interface. RX-only protocols such as NVKP01 keep Send disabled.</p>
+</article>
+</section>
+<section class="page" id="page-about">
+<div class="page-heading"><div><p class="eyebrow">PROJECT INFORMATION</p><h2>About</h2></div></div>
+<article class="card about-card about-card-modern">
+<div class="about-main">
+<div class="about-brand">
+<img alt="OpenRF Platform logo" class="about-logo" src="/logo.svg">
+<div>
+<p class="eyebrow">OPEN SOURCE RF GATEWAY &amp; ANALYZER</p>
+<h2>OpenRF Platform</h2>
+</div>
+</div>
+<p>A compact and powerful RF gateway and analyzer for <strong>ESP32-S3</strong> and CC1101. It provides precise RAW Learn/Replay, protocol-aware RX events, RF Analyzer, WebUI, REST API, MQTT, Home Assistant Discovery, OTA updates and configuration backup/restore.</p>
+<p class="platform-note"><strong>V2 beta platform:</strong> dual-core operation, PSRAM-aware memory, the V2 Protocol Engine and non-exclusive RF Analyzer. Bidirectional RAW RF Slots provide TX replay and UNKNOWN RAW receive matching. SX1276 LoRa hardware detection is supported; RF-engine integration is pending.</p>
+</div>
+<div class="about-grid about-grid-modern">
+<div><span class="about-icon">●</span><span><span class="label">Created by</span><strong>Kocsis Krisztián</strong></span></div>
+<div><span class="about-icon">▣</span><span><span class="label">Platform</span><strong>ESP32-S3 N16R8</strong><small>16 MB Flash · 8 MB PSRAM</small></span></div>
+<div><span class="about-icon">⌁</span><span><span class="label">RF frontend</span><strong>2 × CC1101</strong><small>433 MHz + 868 MHz</small></span></div>
+<div><span class="about-icon">&lt;/&gt;</span><span><span class="label">Firmware</span><strong id="aboutFirmware">Loading…</strong><small>Beta · hardware testing in progress</small></span></div>
+<div><span class="about-icon">◌</span><span><span class="label">Architecture &amp; development support</span><strong>ChatGPT (OpenAI)</strong></span></div>
+<div><span class="about-icon">◇</span><span><span class="label">License</span><strong>MIT</strong></span></div>
+</div>
+</article>
+</section>
+</main>
+<div aria-hidden="true" class="modal-backdrop" id="slotSaveModal">
+<section aria-labelledby="slotSaveTitle" aria-modal="true" class="modal-card" role="dialog">
+<div class="modal-heading">
+<div><p class="eyebrow">SAFE SLOT SAVE</p><h3 id="slotSaveTitle">Save learned signal</h3></div>
+</div>
+<label class="field"><span>Destination slot</span><select id="slotSaveSelect"></select></label>
+<label class="field"><span>Slot name</span><input id="slotSaveName" maxlength="32" type="text"></label>
+<p class="slot-save-warning" id="slotSaveWarning"></p>
+<div class="modal-actions">
+<button class="button button-secondary" id="slotSaveCancel" type="button">Cancel</button>
+<button class="button button-success" id="slotSaveConfirm" type="button">Save to slot</button>
+</div>
+</section>
+</div>
+<script src="/app.js"></script>
 </body>
 </html>

@@ -2,6 +2,7 @@
 #include <LittleFS.h>
 #include <ArduinoJson.h>
 #include "config.h"
+#include "radio.h"
 
 AppConfig config;
 
@@ -19,6 +20,11 @@ void configResetDefaults() {
   config.homeAssistantDiscovery = true;
   config.replayCount = 1;
   config.radioFrequencyMhz = 433;
+  config.radio1Enabled = true;
+  config.radio2Enabled = false;
+  config.loraEnabled = false;
+  config.radio1FrequencyMhz = OPENRF_RADIO1_DEFAULT_FREQUENCY_MHZ;
+  config.radio2FrequencyMhz = OPENRF_RADIO2_DEFAULT_FREQUENCY_MHZ;
   config.rxSlotLearnMinRssi = -75;
   config.analyzerMinRssi = -75;
   config.analyzerMinPulseCount = 20;
@@ -68,6 +74,18 @@ bool configLoad() {
   config.homeAssistantDiscovery = doc["home_assistant_discovery"] | true;
   config.replayCount = doc["replay_count"] | 1;
   config.radioFrequencyMhz = doc["radio_frequency_mhz"] | 433;
+  config.radio1Enabled = doc["radio1_enabled"] | true;
+  config.radio2Enabled = doc["radio2_enabled"] | false;
+  config.loraEnabled = doc["lora_enabled"] | false;
+  config.radio1FrequencyMhz = doc["radio1_frequency_mhz"] | OPENRF_RADIO1_DEFAULT_FREQUENCY_MHZ;
+  config.radio2FrequencyMhz = doc["radio2_frequency_mhz"] | OPENRF_RADIO2_DEFAULT_FREQUENCY_MHZ;
+
+  if (config.radio1FrequencyMhz < 430.0F || config.radio1FrequencyMhz > 440.0F) {
+    config.radio1FrequencyMhz = OPENRF_RADIO1_DEFAULT_FREQUENCY_MHZ;
+  }
+  if (config.radio2FrequencyMhz < 867.0F || config.radio2FrequencyMhz > 870.0F) {
+    config.radio2FrequencyMhz = OPENRF_RADIO2_DEFAULT_FREQUENCY_MHZ;
+  }
   config.rxSlotLearnMinRssi = doc["rxslot_learn_min_rssi"] | -75;
   config.analyzerMinRssi = doc["analyzer_min_rssi"] | -75;
   config.analyzerMinPulseCount = doc["analyzer_min_pulse_count"] | 20;
@@ -131,6 +149,11 @@ bool configSave() {
   doc["home_assistant_discovery"] = config.homeAssistantDiscovery;
   doc["replay_count"] = config.replayCount;
   doc["radio_frequency_mhz"] = config.radioFrequencyMhz;
+  doc["radio1_enabled"] = config.radio1Enabled;
+  doc["radio2_enabled"] = config.radio2Enabled;
+  doc["lora_enabled"] = config.loraEnabled;
+  doc["radio1_frequency_mhz"] = config.radio1FrequencyMhz;
+  doc["radio2_frequency_mhz"] = config.radio2FrequencyMhz;
   doc["rxslot_learn_min_rssi"] = config.rxSlotLearnMinRssi;
   doc["analyzer_min_rssi"] = config.analyzerMinRssi;
   doc["analyzer_min_pulse_count"] = config.analyzerMinPulseCount;
@@ -166,7 +189,11 @@ String configToJson() {
   doc["mqtt_password_set"] = config.mqttPassword.length() > 0;
   doc["home_assistant_discovery"] = config.homeAssistantDiscovery;
   doc["replay_count"] = config.replayCount;
-  doc["radio_frequency_mhz"] = config.radioFrequencyMhz;
+  doc["radio1_enabled"] = config.radio1Enabled;
+  doc["radio2_enabled"] = config.radio2Enabled;
+  doc["lora_enabled"] = config.loraEnabled;
+  doc["radio1_frequency_mhz"] = config.radio1FrequencyMhz;
+  doc["radio2_frequency_mhz"] = config.radio2FrequencyMhz;
   doc["rxslot_learn_min_rssi"] = config.rxSlotLearnMinRssi;
   doc["analyzer_min_rssi"] = config.analyzerMinRssi;
   doc["analyzer_min_pulse_count"] = config.analyzerMinPulseCount;

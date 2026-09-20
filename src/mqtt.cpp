@@ -9,12 +9,34 @@
 #include "radio.h"
 #include "rxslots.h"
 #include "storage.h"
+#include "raw_slot_matcher.h"
 #include "scratch.h"
 #include "version.h"
 #include "openrf_wifi.h"
 #include "platform_compat.h"
 
 namespace {
+
+String v2ActionCodeHex(uint64_t code) {
+  char buffer[19];
+  const uint32_t hi = static_cast<uint32_t>(code >> 32);
+  const uint32_t lo = static_cast<uint32_t>(code);
+  if (hi) snprintf(buffer, sizeof(buffer), "%08X%08X", hi, lo);
+  else snprintf(buffer, sizeof(buffer), "%08X", lo);
+  String out(buffer);
+  while (out.length() > 1 && out[0] == '0') out.remove(0, 1);
+  return out;
+}
+
+const char* v2ActionProtocolName(uint16_t protocolId) {
+  switch (protocolId) {
+    case 1: return "EV1527/Princeton";
+    case 2: return "PT2262/Tri-State";
+    case 4: return "HT12E";
+    default: return "Unknown";
+  }
+}
+
 WiFiClient networkClient;
 PubSubClient client(networkClient);
 uint32_t lastConnectAttemptMs = 0;
@@ -103,7 +125,28 @@ bool publishDiscoveryDocument(const String& topic, JsonDocument& doc) {
 bool sendSlot(uint8_t slot) {
   SlotInfo info;
   if (!storageLoadSlot(slot, openrfScratch, OPENRF_MAX_RAW_PULSES, info)) return false;
-  return rfCommandSendRaw(openrfScratch, info.pulseCount, config.replayCount);
+  const uint8_t radioId = (info.radioId == 1 || info.radioId == 2)
+                              ? info.radioId
+                              : (info.frequencyMHz >= 700.0F ? 2 : 1);
+  return rfCommandSendRawTuned(openrfScratch, info.pulseCount, config.replayCount,
+                               radioId, info.frequencyMHz);
+}
+
+void publishRxSlotSendState(uint8_t slot, const char* state, const RxSlotInfo* info = nullptr) {
+  if (!client.connected()) return;
+  JsonDocument doc;
+  doc["state"] = state;
+  doc["slot"] = slot;
+  if (info != nullptr) {
+    doc["name"] = info->name;
+    doc["protocol"] = info->protocol;
+    doc["radio_id"] = info->radioId;
+    doc["frequency_mhz"] = serialized(String(info->frequencyMHz, 4));
+  }
+  String payload;
+  serializeJson(doc, payload);
+  const String topic = baseTopic + "/rxslot/" + String(slot) + "/send/state";
+  client.publish(topic.c_str(), payload.c_str(), false);
 }
 
 void callback(char* topic, byte* payload, unsigned int length) {
@@ -120,6 +163,37 @@ void callback(char* topic, byte* payload, unsigned int length) {
     if (!beginMqttLearn(slot, "RF Slot " + String(slot))) {
       publishLearnState("busy", slot);
     }
+    return;
+  }
+
+  const String rxPrefix = baseTopic + "/rxslot/";
+  if (incoming.startsWith(rxPrefix)) {
+    const int slash = incoming.indexOf('/', rxPrefix.length());
+    if (slash < 0) return;
+    const int slotNumber = incoming.substring(rxPrefix.length(), slash).toInt();
+    if (slotNumber < 1 || slotNumber > OPENRF_RX_SLOT_COUNT) return;
+    const uint8_t slot = static_cast<uint8_t>(slotNumber);
+    const String action = incoming.substring(slash + 1);
+    if (action != "send") return;
+
+    const RxSlotInfo info = rxSlotGetInfo(slot);
+    if (!info.used) {
+      publishRxSlotSendState(slot, "empty", &info);
+      return;
+    }
+    if (!info.sendSupported) {
+      publishRxSlotSendState(slot, "unsupported", &info);
+      return;
+    }
+
+    // Step 25: MQTT and Home Assistant use the exact same central decoded
+    // RX Slot TX path as the WebUI. rxSlotSend() owns protocol encoding,
+    // temporary slot-frequency tuning, TX and restoration of Operating RF.
+    const bool ok = rxSlotSend(slot, config.replayCount);
+    publishRxSlotSendState(slot, ok ? "sent" : "error", &info);
+    Serial.print(F("MQTT RX slot command: "));
+    Serial.print(slot);
+    Serial.println(ok ? F(" sent") : F(" failed"));
     return;
   }
 
@@ -159,6 +233,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
 
   if (action == "delete") {
     const bool ok = storageDeleteSlot(slot);
+    if (ok) rawSlotMatcherClear(slot);
     client.publish(stateTopic.c_str(), ok ? "deleted" : "error", true);
     if (ok && config.homeAssistantDiscovery) mqttPublishDiscovery();
     mqttPublishStatus();
@@ -192,6 +267,7 @@ void connectIfNeeded() {
   client.subscribe((baseTopic + "/slot/+/send").c_str());
   client.subscribe((baseTopic + "/slot/+/relearn").c_str());
   client.subscribe((baseTopic + "/slot/+/delete").c_str());
+  client.subscribe((baseTopic + "/rxslot/+/send").c_str());
   client.subscribe((baseTopic + "/learn/next").c_str());
   mqttPublishStatus();
   if (config.homeAssistantDiscovery) mqttPublishDiscovery();
@@ -209,6 +285,7 @@ void mqttHandleRFEventImpl(const RFEventMessage& event) {
     doc["duration_us"] = event.durationUs;
     doc["rssi_dbm"] = event.rssiDbm;
     doc["frequency_mhz"] = event.frequencyMhz;
+    doc["radio_id"] = event.radioId;
 
     String payload;
     serializeJson(doc, payload);
@@ -222,10 +299,11 @@ void mqttHandleRFEventImpl(const RFEventMessage& event) {
 
     uint32_t fingerprint = 0;
     const bool ok = storageSaveSlot(
-        pendingLearnSlot, pendingLearnName, event.frequencyMhz,
+        pendingLearnSlot, pendingLearnName, event.frequencyMhz, event.radioId,
         event.pulses, event.pulseCount, event.durationUs, &fingerprint);
 
     const uint8_t completedSlot = pendingLearnSlot;
+    if (ok) rawSlotMatcherReload(completedSlot);
     pendingLearnActive = false;
     pendingLearnSlot = 0;
     pendingLearnName = "";
@@ -244,7 +322,9 @@ void mqttHandleRFEventImpl(const RFEventMessage& event) {
       if (config.homeAssistantDiscovery) mqttPublishDiscovery();
       Serial.print("MQTT learn saved slot ");
       Serial.print(completedSlot);
-      Serial.print(", fingerprint ");
+      Serial.print(", R"); Serial.print(event.radioId);
+      Serial.print(" @ "); Serial.print(event.frequencyMhz, 4);
+      Serial.print(" MHz, fingerprint ");
       Serial.println(fingerprint, HEX);
     } else {
       Serial.print("MQTT learn save failed for slot ");
@@ -271,7 +351,10 @@ void processDiscovery() {
   const String id = deviceIdentifier();
   const String availability = baseTopic + "/availability";
 
-  // Fixed bridge entities: steps 0..4.
+  // Fixed bridge entities: steps 0..2. Steps 3..4 remove the legacy raw-frame
+  // diagnostic sensors. The /rx MQTT stream remains available, but Home
+  // Assistant receives only actionable protocol, RX Slot and Learned RAW
+  // events instead of recording every captured RF frame.
   if (discoveryStep == 0) {
     JsonDocument doc;
     doc["name"] = "Learn next empty slot";
@@ -306,109 +389,152 @@ void processDiscovery() {
     addDevice(doc);
     publishDiscoveryDocument("homeassistant/sensor/" + id + "/status/config", doc);
   } else if (discoveryStep == 3) {
-    JsonDocument doc;
-    doc["name"] = "Last RF pulse count";
-    doc["unique_id"] = id + "_rx_pulses";
-    doc["state_topic"] = baseTopic + "/rx";
-    doc["value_template"] = "{{ value_json.pulse_count }}";
-    doc["availability_topic"] = availability;
-    doc["icon"] = "mdi:pulse";
-    addDevice(doc);
-    publishDiscoveryDocument("homeassistant/sensor/" + id + "/rx_pulses/config", doc);
+    const String topic = "homeassistant/sensor/" + id + "/rx_pulses/config";
+    client.publish(topic.c_str(), "", true);
   } else if (discoveryStep == 4) {
-    JsonDocument doc;
-    doc["name"] = "Last RF RSSI";
-    doc["unique_id"] = id + "_rx_rssi";
-    doc["state_topic"] = baseTopic + "/rx";
-    doc["value_template"] = "{{ value_json.rssi_dbm }}";
-    doc["unit_of_measurement"] = "dBm";
-    doc["device_class"] = "signal_strength";
-    doc["state_class"] = "measurement";
-    doc["availability_topic"] = availability;
-    addDevice(doc);
-    publishDiscoveryDocument("homeassistant/sensor/" + id + "/rx_rssi/config", doc);
-  } else if (discoveryStep < 5 + OPENRF_SLOT_COUNT * 3U) {
-    // TX slots: three discovery documents per slot.
+    const String topic = "homeassistant/sensor/" + id + "/rx_rssi/config";
+    client.publish(topic.c_str(), "", true);
+  } else if (discoveryStep < 5 + OPENRF_SLOT_COUNT * 5U) {
+    // Step 40: each RAW RF slot is now bidirectional. Existing Send/Relearn/
+    // Delete buttons remain, and two receive-side discovery documents expose
+    // the same learned RAW identity as a trigger + one-second binary sensor.
     const uint16_t relative = discoveryStep - 5;
-    const uint8_t slot = static_cast<uint8_t>(relative / 3U) + 1;
-    const uint8_t item = static_cast<uint8_t>(relative % 3U);
+    const uint8_t slot = static_cast<uint8_t>(relative / 5U) + 1;
+    const uint8_t item = static_cast<uint8_t>(relative % 5U);
     const SlotInfo info = storageGetSlotInfo(slot);
-    const String slotBase = "homeassistant/button/" + id + "/slot_" + String(slot);
+    const String buttonBase = "homeassistant/button/" + id + "/slot_" + String(slot);
+    const String triggerTopic = "homeassistant/device_automation/" + id + "/raw_slot_" + String(slot) + "/config";
+    const String sensorTopic = "homeassistant/binary_sensor/" + id + "/raw_slot_" + String(slot) + "/config";
 
-    if (!info.used) {
-      const char* suffix = item == 0 ? "/config" : (item == 1 ? "_relearn/config" : "_delete/config");
-      client.publish((slotBase + suffix).c_str(), "", true);
-    } else {
-      JsonDocument doc;
-      if (item == 0) {
-        doc["name"] = info.name;
-        doc["unique_id"] = id + "_slot_" + String(slot);
-        doc["command_topic"] = baseTopic + "/slot/" + String(slot) + "/send";
-        doc["icon"] = "mdi:remote";
-      } else if (item == 1) {
-        doc["name"] = info.name + " Relearn";
-        doc["unique_id"] = id + "_slot_" + String(slot) + "_relearn";
-        doc["command_topic"] = baseTopic + "/slot/" + String(slot) + "/relearn";
-        doc["icon"] = "mdi:refresh";
+    if (item <= 2U) {
+      const String topic = item == 0U ? buttonBase + "/config"
+                         : item == 1U ? buttonBase + "_relearn/config"
+                                      : buttonBase + "_delete/config";
+      if (!info.used) {
+        client.publish(topic.c_str(), "", true);
       } else {
-        doc["name"] = info.name + " Delete";
-        doc["unique_id"] = id + "_slot_" + String(slot) + "_delete";
-        doc["command_topic"] = baseTopic + "/slot/" + String(slot) + "/delete";
-        doc["icon"] = "mdi:delete";
+        JsonDocument doc;
+        if (item == 0U) {
+          doc["name"] = info.name;
+          doc["unique_id"] = id + "_slot_" + String(slot);
+          doc["command_topic"] = baseTopic + "/slot/" + String(slot) + "/send";
+          doc["icon"] = "mdi:remote";
+        } else if (item == 1U) {
+          doc["name"] = info.name + " Relearn";
+          doc["unique_id"] = id + "_slot_" + String(slot) + "_relearn";
+          doc["command_topic"] = baseTopic + "/slot/" + String(slot) + "/relearn";
+          doc["icon"] = "mdi:refresh";
+        } else {
+          doc["name"] = info.name + " Delete";
+          doc["unique_id"] = id + "_slot_" + String(slot) + "_delete";
+          doc["command_topic"] = baseTopic + "/slot/" + String(slot) + "/delete";
+          doc["icon"] = "mdi:delete";
+        }
+        doc["payload_press"] = "PRESS";
+        doc["availability_topic"] = availability;
+        addDevice(doc);
+        publishDiscoveryDocument(topic, doc);
       }
-      doc["payload_press"] = "PRESS";
-      doc["availability_topic"] = availability;
-      addDevice(doc);
-      const String topic = item == 0 ? slotBase + "/config"
-                                     : slotBase + (item == 1 ? "_relearn/config" : "_delete/config");
-      publishDiscoveryDocument(topic, doc);
+    } else if (item == 3U) {
+      if (!info.used) {
+        client.publish(triggerTopic.c_str(), "", true);
+      } else {
+        JsonDocument doc;
+        doc["automation_type"] = "trigger";
+        doc["type"] = "button_short_press";
+        doc["subtype"] = "raw_slot_" + String(slot);
+        doc["topic"] = baseTopic + "/slot/" + String(slot) + "/event";
+        doc["value_template"] = "{{ value_json.event }}";
+        doc["payload"] = "matched";
+        addDevice(doc);
+        publishDiscoveryDocument(triggerTopic, doc);
+      }
+    } else {
+      if (!info.used) {
+        client.publish(sensorTopic.c_str(), "", true);
+      } else {
+        JsonDocument doc;
+        doc["name"] = info.name + " RX";
+        doc["unique_id"] = id + "_raw_slot_" + String(slot);
+        doc["state_topic"] = baseTopic + "/slot/" + String(slot) + "/event";
+        doc["value_template"] = "{{ value_json.event }}";
+        doc["payload_on"] = "matched";
+        doc["off_delay"] = 1;
+        doc["availability_topic"] = availability;
+        doc["icon"] = "mdi:radio-tower";
+        addDevice(doc);
+        publishDiscoveryDocument(sensorTopic, doc);
+      }
     }
   } else {
-    // RX slots: trigger + binary sensor per slot.
-    const uint16_t rxStart = 5 + OPENRF_SLOT_COUNT * 3U;
+    // Protocol RX slots keep their receive trigger + binary sensor + optional
+    // V2-native Send button.
+    const uint16_t rxStart = 5 + OPENRF_SLOT_COUNT * 5U;
     const uint16_t relative = discoveryStep - rxStart;
-    const uint8_t slot = static_cast<uint8_t>(relative / 2U) + 1;
-    const uint8_t item = static_cast<uint8_t>(relative % 2U);
+    const uint8_t slot = static_cast<uint8_t>(relative / 3U) + 1;
+    const uint8_t item = static_cast<uint8_t>(relative % 3U);
     const RxSlotInfo info = rxSlotGetInfo(slot);
     const String triggerTopic = "homeassistant/device_automation/" + id + "/rx_slot_" + String(slot) + "/config";
     const String sensorTopic = "homeassistant/binary_sensor/" + id + "/rx_slot_" + String(slot) + "/config";
+    const String sendTopic = "homeassistant/button/" + id + "/rx_slot_" + String(slot) + "_send/config";
 
-    if (!info.used || !info.enabled) {
-      client.publish((item == 0 ? triggerTopic : sensorTopic).c_str(), "", true);
-    } else if (item == 0) {
-      JsonDocument doc;
-      doc["automation_type"] = "trigger";
-      doc["type"] = "button_short_press";
-      doc["subtype"] = "rx_slot_" + String(slot);
-      doc["topic"] = baseTopic + "/rxslot/" + String(slot) + "/event";
-      doc["value_template"] = "{{ value_json.event }}";
-      doc["payload"] = "pressed";
-      addDevice(doc);
-      publishDiscoveryDocument(triggerTopic, doc);
+    if (item == 0) {
+      if (!info.used || !info.enabled) {
+        client.publish(triggerTopic.c_str(), "", true);
+      } else {
+        JsonDocument doc;
+        doc["automation_type"] = "trigger";
+        doc["type"] = "button_short_press";
+        doc["subtype"] = "rx_slot_" + String(slot);
+        doc["topic"] = baseTopic + "/rxslot/" + String(slot) + "/event";
+        doc["value_template"] = "{{ value_json.event }}";
+        doc["payload"] = "pressed";
+        addDevice(doc);
+        publishDiscoveryDocument(triggerTopic, doc);
+      }
+    } else if (item == 1) {
+      if (!info.used || !info.enabled) {
+        client.publish(sensorTopic.c_str(), "", true);
+      } else {
+        JsonDocument doc;
+        doc["name"] = info.name;
+        doc["unique_id"] = id + "_rx_slot_" + String(slot);
+        doc["state_topic"] = baseTopic + "/rxslot/" + String(slot) + "/event";
+        doc["value_template"] = "{{ value_json.event }}";
+        doc["payload_on"] = "pressed";
+        doc["off_delay"] = 1;
+        doc["availability_topic"] = availability;
+        doc["icon"] = "mdi:remote";
+        addDevice(doc);
+        publishDiscoveryDocument(sensorTopic, doc);
+      }
     } else {
-      JsonDocument doc;
-      doc["name"] = info.name;
-      doc["unique_id"] = id + "_rx_slot_" + String(slot);
-      doc["state_topic"] = baseTopic + "/rxslot/" + String(slot) + "/event";
-      doc["value_template"] = "{{ value_json.event }}";
-      doc["payload_on"] = "pressed";
-      doc["off_delay"] = 1;
-      doc["availability_topic"] = availability;
-      doc["icon"] = "mdi:remote";
-      addDevice(doc);
-      publishDiscoveryDocument(sensorTopic, doc);
+      if (!info.used || !info.sendSupported) {
+        client.publish(sendTopic.c_str(), "", true);
+      } else {
+        JsonDocument doc;
+        doc["name"] = info.name + " Send";
+        doc["unique_id"] = id + "_rx_slot_" + String(slot) + "_send";
+        doc["command_topic"] = baseTopic + "/rxslot/" + String(slot) + "/send";
+        doc["payload_press"] = "PRESS";
+        doc["availability_topic"] = availability;
+        doc["icon"] = "mdi:remote";
+        addDevice(doc);
+        publishDiscoveryDocument(sendTopic, doc);
+      }
     }
   }
 
   discoveryStep++;
-  const uint16_t totalSteps = 5 + OPENRF_SLOT_COUNT * 3U + OPENRF_RX_SLOT_COUNT * 2U;
+  const uint16_t totalSteps = 5 + OPENRF_SLOT_COUNT * 5U + OPENRF_RX_SLOT_COUNT * 3U;
   if (discoveryStep >= totalSteps) {
     discoveryPending = false;
     discoveryStep = 0;
-    Serial.print(F("Home Assistant discovery published gradually, TX slots: "));
+    Serial.print(F("Home Assistant discovery published gradually, bidirectional RAW slots: "));
     Serial.print(storageCountUsedSlots());
     Serial.print(F(", RX slots: "));
-    Serial.println(rxSlotCountUsed());
+    Serial.print(rxSlotCountUsed());
+    Serial.println(F(" (receive + supported Send discovery)"));
 
     // Changes requested while a discovery pass was running are coalesced into
     // exactly one additional pass. This avoids restarting the sequence midway,
@@ -431,6 +557,28 @@ void mqttHandleRFEvent(const RFEventMessage& event) {
   mqttHandleRFEventImpl(event);
 }
 
+void mqttHandleV2Action(const RFEventMessage& event) {
+  if (!event.v2Action.available || !config.mqttEnabled || !client.connected()) {
+    return;
+  }
+
+  JsonDocument doc;
+  doc["sequence"] = event.sequence;
+  doc["protocol"] = v2ActionProtocolName(event.v2Action.protocolId);
+  doc["code"] = v2ActionCodeHex(event.v2Action.code);
+  doc["symbols"] = event.v2Action.symbolCount;
+  doc["repeats"] = event.v2Action.repeats;
+  doc["radio_id"] = event.radioId;
+  doc["frequency_mhz"] = event.frequencyMhz;
+  doc["rssi_dbm"] = event.rssiDbm;
+  doc["timestamp_ms"] = event.timestampMs;
+
+  String payload;
+  serializeJson(doc, payload);
+  const String topic = baseTopic + "/v2/event";
+  client.publish(topic.c_str(), payload.c_str(), false);
+}
+
 
 void mqttPublishRxSlotEvent(uint8_t slot, const RxSlotInfo& info) {
   if (!client.connected()) return;
@@ -446,10 +594,34 @@ void mqttPublishRxSlotEvent(uint8_t slot, const RxSlotInfo& info) {
   doc["command"] = info.command;
   doc["symbols"] = info.symbolCount;
   doc["code"] = info.code;
+  doc["radio_id"] = info.radioId;
+  doc["frequency_mhz"] = serialized(String(info.frequencyMHz, 4));
   doc["quality"] = info.lastQuality;
   doc["rssi_dbm"] = info.lastRssi;
   String payload; serializeJson(doc, payload);
   const String topic = baseTopic + "/rxslot/" + String(slot) + "/event";
+  client.publish(topic.c_str(), payload.c_str(), false);
+}
+
+
+void mqttPublishRawSlotEvent(uint8_t slot, const SlotInfo& info,
+                             const RawSlotMatchStats& stats) {
+  if (!client.connected() || !info.used) return;
+  JsonDocument doc;
+  doc["event"] = "matched";
+  doc["slot"] = slot;
+  doc["name"] = info.name;
+  doc["source"] = "learned_raw";
+  doc["radio_id"] = info.radioId;
+  doc["frequency_mhz"] = serialized(String(info.frequencyMHz, 4));
+  doc["pulse_count"] = info.pulseCount;
+  doc["fingerprint"] = info.fingerprint;
+  doc["similarity"] = stats.lastSimilarity;
+  doc["rssi_dbm"] = stats.lastRssi;
+  doc["match_count"] = stats.matchCount;
+  String payload;
+  serializeJson(doc, payload);
+  const String topic = baseTopic + "/slot/" + String(slot) + "/event";
   client.publish(topic.c_str(), payload.c_str(), false);
 }
 
@@ -497,6 +669,14 @@ void mqttPublishStatus() {
   doc["ip"] = WiFi.localIP().toString();
   doc["radio"] = Radio.getModeName();
   doc["frequency_mhz"] = Radio.getFrequency();
+  doc["radio1_active"] = Radio.isRadioActive(1);
+  doc["radio2_active"] = Radio.isRadioActive(2);
+  doc["radio1_default_frequency_mhz"] = Radio.getDefaultFrequency(1);
+  doc["radio2_default_frequency_mhz"] = Radio.getDefaultFrequency(2);
+  doc["radio1_frequency_mhz"] = Radio.getOperatingFrequency(1);
+  doc["radio2_frequency_mhz"] = Radio.getOperatingFrequency(2);
+  doc["radio1_frequency_tuned"] = Radio.isFrequencyTuned(1);
+  doc["radio2_frequency_tuned"] = Radio.isFrequencyTuned(2);
   doc["slots_used"] = storageCountUsedSlots();
   doc["rx_slots_used"] = rxSlotCountUsed();
   String payload;

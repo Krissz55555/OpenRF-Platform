@@ -11,6 +11,7 @@ struct SlotInfo {
   bool used = false;
   String name;
   float frequencyMHz = 433.92F;
+  uint8_t radioId = 0;
   uint16_t pulseCount = 0;
   uint32_t durationUs = 0;
   uint32_t fingerprint = 0;
@@ -19,7 +20,7 @@ struct SlotInfo {
 bool storageSlotExists(uint8_t slot);
 SlotInfo storageGetSlotInfo(uint8_t slot);
 bool storageSaveSlot(uint8_t slot, const String& name, float frequencyMHz,
-                     const int16_t* pulses, uint16_t pulseCount,
+                     uint8_t radioId, const int16_t* pulses, uint16_t pulseCount,
                      uint32_t durationUs, uint32_t* fingerprintOut = nullptr);
 bool storageLoadSlot(uint8_t slot, int16_t* pulses, uint16_t capacity,
                      SlotInfo& info);

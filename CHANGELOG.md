@@ -1,106 +1,66 @@
 # Changelog
 
-## v1.2.0 Final — ESP8266 final feature release
+Release-specific implementation detail and the full v2 development history are
+kept in the linked release notes. This file lists the user-visible release line.
 
-- Added Kinetic Protocol Framework and NVKP01 Kinetic support.
-- Added NVKP01 Learn/RX Slot/MQTT/Home Assistant event path.
-- Added Protocol Manager with classic and Kinetic decoder branches.
-- Added 433.920 / 868.350 MHz selection with CC1101/antenna warning.
-- Added Gateway Mode and Developer Mode (Exclusive Analyzer).
-- Full Analyzer is disabled in Gateway Mode for ESP8266 stability.
-- RX Slots, MQTT RF events, Home Assistant Discovery and event forwarding are inactive while Exclusive Analyzer Mode is active.
-- Added clear WebUI warnings and ESP32 v2 limitation notice.
-- Added gradual Home Assistant Discovery publication.
-- Reduced RAW buffer RAM use and added heap health diagnostics.
-- Improved Analyzer/API/frontend memory behavior.
-- Expanded README and release documentation.
-- Declared v1.2.0 the final ESP8266 feature release; future development moves to ESP32 v2.
+## v2.0.0-beta.2
 
-# v1.2.0 — ESP8266 Final Feature Release
+- Moved the active platform to ESP32-S3 N16R8 with dual-core tasks and PSRAM-aware memory use.
+- Added two-CC1101 concurrent receive support with independent 433/868 MHz profiles,
+  frequency scanning, temporary tuning and stored source-frequency metadata.
+- Introduced the modular V2 protocol engine and registry, normalized events,
+  authoritative routing and protocol-local encoders.
+- Added native EV1527/Princeton, PT2262/PT2272 and HT12E receive/transmit support.
+- Added receive-only NVKP01 Kinetic recognition with conservative structural gates
+  and a sliding 400 ms inactivity dedup window.
+- Removed general legacy protocol receive and transmit fallback paths.
+- Added bidirectional Learned RAW slots: unchanged full-capture replay plus
+  PSRAM-preferred signature matching, runtime statistics, MQTT and HA events.
+- Added a dual-radio Analyzer, expanded diagnostics, live core, heap and PSRAM
+  gauges, radio hardware controls and recovery diagnostics.
+- Added backup/restore, firmware OTA, MQTT and Home Assistant integration for the
+  expanded slot/event model.
+- Refined the responsive WebUI, restored the original header gauges, corrected
+  Dashboard radio state, repaired Diagnostics layout and reduced vertical spacing.
+- Phase A FIX3 reports RSSI-filtered Analyzer captures explicitly and uses the
+  authoritative V2 Protocol Engine result for accepted Analyzer frames.
+- Phase A FIX3.1 lets a newer RSSI-filtered candidate replace an older accepted
+  Analyzer result on screen; the most recent RF event now controls the status.
+- Phase A FIX4 restores comfortable navigation spacing and removes the legacy
+  `Last RF pulse count` and `Last RF RSSI` Home Assistant Discovery sensors.
+  Raw `/rx` MQTT diagnostics remain available, while Home Assistant receives
+  only actionable protocol, RX Slot and Learned RAW events.
+- Consolidated the ESP32-S3 port, subsystem and Step/FIX notes into one beta document.
 
-- Added NVKP01 Kinetic protocol support with RX Slots, MQTT and Home Assistant integration.
-- Added selectable 433/868 MHz operating band in Settings.
-- Added a hardware notice for frequency-specific CC1101 modules and antennas.
-- Optimized Analyzer API memory use with bounded RAW previews, direct JSON streaming and slower non-overlapping polling.
-- Reduced RAW buffer memory pressure and staggered Home Assistant Discovery publishing for ESP8266 stability.
+See [RELEASE_NOTES_V2.0.0-beta.2.md](RELEASE_NOTES_V2.0.0-beta.2.md).
 
-# Changelog
+## v2.0.0-beta.1
 
-All notable changes to OpenRF Platform will be documented in this file.
+First public beta of the ESP32-S3 generation:
 
-The format is inspired by Keep a Changelog.
+- Migrated the active firmware platform from ESP8266 to ESP32-S3 N16R8.
+- Added dual-core task separation for RF processing and system/network services.
+- Added 8 MB PSRAM-aware working memory and 16 MB flash support.
+- Preserved the established WebUI, RF Learn/Replay, MQTT, Home Assistant,
+  REST API, OTA and backup/restore baseline during the platform migration.
+- Established the ESP32-S3 architecture used by subsequent V2 RF development.
 
----
+See [RELEASE_NOTES_V2.0.0-beta.1.md](RELEASE_NOTES_V2.0.0-beta.1.md).
 
-# v1.1.0 — Analyzer v2 Final
+## v1.2.0
 
-Release date: July 2026
+Final ESP8266 feature release and migration baseline for the ESP32-S3 generation.
 
-## Added
+See [RELEASE_NOTES_V1.2.0.md](RELEASE_NOTES_V1.2.0.md).
 
-- Adaptive Candidate diagnostics before Analyzer filtering
-- Adjustable Analyzer-only RSSI threshold
-- Last Candidate RSSI, pulse count, duration and reject reason
-- RAW and normalized RAW pulse views
-- Alternation ratio, same-sign pair and longest-run metrics
-- Adjustable alternation tolerance
-- Visible yellow Developer Mode with ON/OFF state
-- Persistent Analyzer settings in LittleFS
+## v1.1.0
 
-## Changed
+Expanded RF Analyzer workflows and signal inspection tools.
 
-- Restored the clean v1.0.0 Analyzer layout and original filtering behaviour as Standard Mode
-- Moved Analyzer v2 candidate capture, advanced thresholds and normalized diagnostics into Developer Mode
-- Improved unknown structured-signal investigation without affecting RX Slots, RF Learn, MQTT or Home Assistant
-- Finalized Analyzer v2 UI and diagnostics for public release
+See [RELEASE_NOTES_V1.1.0.md](RELEASE_NOTES_V1.1.0.md).
 
-## Fixed
+## v1.0.0
 
-- Improved visibility of Candidate rejection causes
-- Prevented advanced Analyzer controls from cluttering normal operation
+First stable release with the core RF gateway, WebUI and integration features.
 
----
-
-# v1.0.0 — First Stable Release
-
-Release date: July 2026
-
-## Added
-
-- Initial public release
-- Modular RF Gateway architecture
-- RAW Learn
-- RAW Replay
-- 30 persistent TX slots
-- Universal RX Slots
-- Native RF protocol decoder framework
-- RF Analyzer
-- MQTT integration
-- Home Assistant Discovery
-- REST API
-- OTA firmware updates
-- Backup / Restore
-- WebUI
-- LittleFS configuration storage
-
-## Changed
-
-- Project renamed to **OpenRF Platform**
-- Stable REST API
-- Stable WebUI
-- Modular decoder architecture
-- PlatformIO project structure
-
-## Removed
-
-- Legacy RAW matcher
-- Experimental HCS200 implementation
-
----
-
-# Previous development
-
-Earlier development milestones are documented inside the `/docs` directory.
-### NVKP01 false-trigger protection
-
-Actionable NVKP01 RX Slot, MQTT and Home Assistant events now require two short, structurally valid Kinetic captures within one second. The short-frame envelope (28–70 pulses, 18–60 ms) excludes long RF remote trains, while the second capture corresponds to the mechanical press/release cycle. Analyzer recognition remains intentionally broader for diagnostics.
+See [RELEASE_NOTES_V1.0.0.md](RELEASE_NOTES_V1.0.0.md).

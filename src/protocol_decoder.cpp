@@ -59,28 +59,62 @@ bool classifyPulse(uint32_t value, const Centers& c, bool& isLong, float& error)
 }
 
 bool decodeBinarySegment(const int16_t* p, uint16_t start, uint16_t end,
-                         const Centers& c, Candidate& out) {
+                         const Centers& c, Candidate& out,
+                         LegacyEv1527SegmentDiagnostics* diagnostics = nullptr) {
+  const uint16_t rawStart = start;
   while (start < end && p[start] < 0) start++;
   const uint16_t n = end > start ? end - start : 0;
-  if (n < MIN_BINARY_BITS * 2 || n > MAX_BINARY_BITS * 2 + 2) return false;
+  if (diagnostics) {
+    diagnostics->rawPulseCount = end > rawStart ? end - rawStart : 0;
+    diagnostics->trimmedPulseCount = n;
+  }
+  if (n < MIN_BINARY_BITS * 2 || n > MAX_BINARY_BITS * 2 + 2) {
+    if (diagnostics) diagnostics->rejectReason = LegacyBinaryRejectReason::PULSE_COUNT;
+    return false;
+  }
   const uint16_t pairCount = n / 2;
-  if (pairCount < MIN_BINARY_BITS || pairCount > MAX_BINARY_BITS) return false;
+  if (pairCount < MIN_BINARY_BITS || pairCount > MAX_BINARY_BITS) {
+    if (diagnostics) diagnostics->rejectReason = LegacyBinaryRejectReason::PULSE_COUNT;
+    return false;
+  }
 
   uint64_t code = 0; float totalError = 0; uint8_t bits = 0;
   for (uint16_t i = 0; i + 1 < n && bits < MAX_BINARY_BITS; i += 2) {
-    if (!(p[start + i] > 0 && p[start + i + 1] < 0)) return false;
+    if (!(p[start + i] > 0 && p[start + i + 1] < 0)) {
+      if (diagnostics) diagnostics->rejectReason = LegacyBinaryRejectReason::POLARITY;
+      return false;
+    }
     bool aLong = false, bLong = false; float ea = 0, eb = 0;
     if (!classifyPulse(width(p[start+i]), c, aLong, ea) ||
-        !classifyPulse(width(p[start+i+1]), c, bLong, eb) || aLong == bLong) return false;
+        !classifyPulse(width(p[start+i+1]), c, bLong, eb)) {
+      if (diagnostics) diagnostics->rejectReason = LegacyBinaryRejectReason::CLASSIFICATION;
+      return false;
+    }
+    if (aLong == bLong) {
+      if (diagnostics) diagnostics->rejectReason = LegacyBinaryRejectReason::SAME_LENGTH_PAIR;
+      return false;
+    }
     code = (code << 1) | (aLong && !bLong ? 1ULL : 0ULL);
     totalError += ea + eb; bits++;
   }
-  if (bits < MIN_BINARY_BITS) return false;
+  if (diagnostics) diagnostics->decodedBits = bits;
+  if (bits < MIN_BINARY_BITS) {
+    if (diagnostics) diagnostics->rejectReason = LegacyBinaryRejectReason::PULSE_COUNT;
+    return false;
+  }
   const float meanError = totalError / (bits * 2.0F);
   const int q = static_cast<int>(100.0F - meanError * 100.0F);
-  if (q < 72) return false;
+  if (diagnostics) diagnostics->quality = static_cast<uint8_t>(constrain(q, 0, 100));
+  if (q < 72) {
+    if (diagnostics) diagnostics->rejectReason = LegacyBinaryRejectReason::QUALITY;
+    return false;
+  }
   out.protocol = OpenRfProtocol::EV1527_PRINCETON;
   out.symbols = bits; out.code = code; out.quality = static_cast<uint8_t>(constrain(q, 0, 100));
+  if (diagnostics) {
+    diagnostics->accepted = true;
+    diagnostics->rejectReason = LegacyBinaryRejectReason::NONE;
+  }
   return true;
 }
 
@@ -127,33 +161,59 @@ const char* protocolName(OpenRfProtocol protocol) {
   }
 }
 
-ProtocolDecodeResult protocolDecode(const int16_t* pulses, uint16_t count) {
+ProtocolDecodeResult protocolDecodeImpl(const int16_t* pulses, uint16_t count,
+                                      LegacyEv1527Diagnostics* diagnostics) {
   ProtocolDecodeResult result;
+  if (diagnostics) { *diagnostics = LegacyEv1527Diagnostics{}; diagnostics->available = true; }
   if (!pulses || count < 16) return result;
   const Centers centers = estimateCenters(pulses, count);
+  if (diagnostics) {
+    diagnostics->centersValid = centers.valid;
+    if (centers.valid) {
+      diagnostics->shortCenterUs = static_cast<uint16_t>(centers.shortUs + 0.5F);
+      diagnostics->longCenterUs = static_cast<uint16_t>(centers.longUs + 0.5F);
+      diagnostics->centerRatioX100 = static_cast<uint16_t>((centers.longUs / centers.shortUs) * 100.0F + 0.5F);
+    }
+  }
   if (!centers.valid) return result;
 
   const uint32_t gapThreshold = max(static_cast<uint32_t>(4500),
                                     static_cast<uint32_t>(centers.longUs * 4.5F));
+  if (diagnostics) diagnostics->gapThresholdUs = gapThreshold;
   Candidate candidates[MAX_CANDIDATES]; uint8_t candidateCount = 0;
   uint16_t segmentStart = 0;
   for (uint16_t i = 0; i <= count; i++) {
     const bool boundary = i == count || width(pulses[i]) >= gapThreshold;
     if (!boundary) continue;
+    LegacyEv1527SegmentDiagnostics segmentDiag;
+    const uint8_t diagIndex = diagnostics ? diagnostics->segmentCount : 0;
+    if (diagnostics && diagnostics->segmentCount < kLegacyEv1527MaxSegments) diagnostics->segmentCount++;
     if (i > segmentStart + 7) {
       Candidate c;
       if (decodeTriStateSegment(pulses, segmentStart, i, centers, c)) addCandidate(candidates, candidateCount, c);
       c = Candidate{};
-      if (decodeBinarySegment(pulses, segmentStart, i, centers, c)) addCandidate(candidates, candidateCount, c);
+      if (decodeBinarySegment(pulses, segmentStart, i, centers, c, diagnostics && diagIndex < kLegacyEv1527MaxSegments ? &segmentDiag : nullptr)) {
+        addCandidate(candidates, candidateCount, c);
+        if (diagnostics) diagnostics->binaryCandidateCount++;
+      }
+    } else {
+      segmentDiag.rawPulseCount = i > segmentStart ? i - segmentStart : 0;
+      segmentDiag.trimmedPulseCount = segmentDiag.rawPulseCount;
+      segmentDiag.rejectReason = LegacyBinaryRejectReason::PULSE_COUNT;
     }
+    if (diagnostics && diagIndex < kLegacyEv1527MaxSegments) diagnostics->segments[diagIndex] = segmentDiag;
     segmentStart = i + 1;
   }
   // Some remotes are captured without an internal sync gap. Try the whole frame too.
   if (!candidateCount) {
+    if (diagnostics) diagnostics->wholeCaptureFallbackTried = true;
     Candidate c;
     if (decodeTriStateSegment(pulses, 0, count, centers, c)) addCandidate(candidates, candidateCount, c);
     c = Candidate{};
-    if (decodeBinarySegment(pulses, 0, count, centers, c)) addCandidate(candidates, candidateCount, c);
+    if (decodeBinarySegment(pulses, 0, count, centers, c, diagnostics ? &diagnostics->wholeCapture : nullptr)) {
+      addCandidate(candidates, candidateCount, c);
+      if (diagnostics) diagnostics->binaryCandidateCount++;
+    }
   }
   if (!candidateCount) return result;
 
@@ -179,5 +239,33 @@ ProtocolDecodeResult protocolDecode(const int16_t* pulses, uint16_t count) {
   result.pulseLengthUs = static_cast<uint16_t>((centers.shortUs + 0.5F));
   result.repeats = bestRepeats;
   result.quality = best.quality;
+  if (diagnostics && best.protocol == OpenRfProtocol::EV1527_PRINCETON) {
+    diagnostics->finalRecognized = true;
+    diagnostics->finalBits = best.symbols;
+    diagnostics->finalCode = best.code;
+    diagnostics->finalRepeats = bestRepeats;
+    diagnostics->finalQuality = best.quality;
+  }
   return result;
+}
+
+ProtocolDecodeResult protocolDecode(const int16_t* pulses, uint16_t count) {
+  return protocolDecodeImpl(pulses, count, nullptr);
+}
+
+ProtocolDecodeResult protocolDecodeDetailed(const int16_t* pulses, uint16_t count,
+                                            LegacyEv1527Diagnostics& diagnostics) {
+  return protocolDecodeImpl(pulses, count, &diagnostics);
+}
+
+const char* legacyBinaryRejectReasonName(LegacyBinaryRejectReason reason) {
+  switch (reason) {
+    case LegacyBinaryRejectReason::NONE: return "NONE";
+    case LegacyBinaryRejectReason::PULSE_COUNT: return "PULSE_COUNT";
+    case LegacyBinaryRejectReason::POLARITY: return "POLARITY";
+    case LegacyBinaryRejectReason::CLASSIFICATION: return "CLASSIFICATION";
+    case LegacyBinaryRejectReason::SAME_LENGTH_PAIR: return "SAME_LENGTH_PAIR";
+    case LegacyBinaryRejectReason::QUALITY: return "QUALITY";
+    default: return "UNKNOWN";
+  }
 }

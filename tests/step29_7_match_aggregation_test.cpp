@@ -1,0 +1,106 @@
+#include <array>
+#include <cstdint>
+#include <cstdio>
+
+#include "protocol_engine.h"
+
+namespace {
+
+constexpr uint32_t kT = 400U;
+constexpr size_t kFramePulses = 50U;
+
+int16_t neg(uint32_t value) {
+  return static_cast<int16_t>(-static_cast<int32_t>(value));
+}
+
+template <size_t N>
+RawCapture captureFor(const std::array<int16_t, N>& pulses) {
+  uint32_t duration = 0U;
+  for (const int16_t p : pulses) duration += static_cast<uint32_t>(p < 0 ? -p : p);
+  return RawCapture(pulses.data(), static_cast<uint16_t>(pulses.size()),
+                    duration, -30.0F, 433.92F, 1U, 1U);
+}
+
+template <size_t N>
+void appendEvFrame(std::array<int16_t, N>& out, size_t base, uint32_t code) {
+  for (size_t bit = 0; bit < 24U; ++bit) {
+    const bool one = ((code >> (23U - bit)) & 1U) != 0U;
+    out[base + bit * 2U] = static_cast<int16_t>(one ? kT * 3U : kT);
+    out[base + bit * 2U + 1U] = neg(one ? kT : kT * 3U);
+  }
+  out[base + 48U] = static_cast<int16_t>(kT);
+  out[base + 49U] = neg(kT * 31U);
+}
+
+template <size_t N>
+void appendPtFrame(std::array<int16_t, N>& out, size_t base,
+                   const std::array<uint8_t, 12>& trits) {
+  for (size_t i = 0; i < trits.size(); ++i) {
+    const size_t o = base + i * 4U;
+    const uint8_t s = trits[i];
+    if (s == 0U) {
+      out[o] = static_cast<int16_t>(kT); out[o+1] = neg(kT*3U);
+      out[o+2] = static_cast<int16_t>(kT); out[o+3] = neg(kT*3U);
+    } else if (s == 1U) {
+      out[o] = static_cast<int16_t>(kT*3U); out[o+1] = neg(kT);
+      out[o+2] = static_cast<int16_t>(kT*3U); out[o+3] = neg(kT);
+    } else {
+      out[o] = static_cast<int16_t>(kT); out[o+1] = neg(kT*3U);
+      out[o+2] = static_cast<int16_t>(kT*3U); out[o+3] = neg(kT);
+    }
+  }
+  out[base + 48U] = static_cast<int16_t>(kT);
+  out[base + 49U] = neg(kT * 31U);
+}
+
+bool decisionRule() {
+  return protocolEngineDecisionFromMatchCount(0U) == ProtocolEngineDecisionState::UNKNOWN &&
+         protocolEngineDecisionFromMatchCount(1U) == ProtocolEngineDecisionState::KNOWN &&
+         protocolEngineDecisionFromMatchCount(2U) == ProtocolEngineDecisionState::AMBIGUOUS &&
+         protocolEngineDecisionFromMatchCount(9U) == ProtocolEngineDecisionState::AMBIGUOUS;
+}
+
+bool evIsKnown() {
+  std::array<int16_t, kFramePulses * 3U> pulses{};
+  for (size_t f = 0; f < 3U; ++f) appendEvFrame(pulses, f * kFramePulses, 0xFFFF09U);
+  const auto o = protocolEngineObserve(captureFor(pulses));
+  return o.decision == ProtocolEngineDecisionState::KNOWN &&
+         o.matchCount == 1U && o.candidateCount == 1U &&
+         o.selectedProtocol == ProtocolId::EV1527_PRINCETON &&
+         o.candidates[0] == ProtocolId::EV1527_PRINCETON;
+}
+
+bool ptIsKnown() {
+  const std::array<uint8_t, 12> trits = {2,2,0,1,2,0,2,1,0,1,2,0};
+  std::array<int16_t, kFramePulses * 3U> pulses{};
+  for (size_t f = 0; f < 3U; ++f) appendPtFrame(pulses, f * kFramePulses, trits);
+  const auto o = protocolEngineObserve(captureFor(pulses));
+  return o.decision == ProtocolEngineDecisionState::KNOWN &&
+         o.matchCount == 1U && o.candidateCount == 1U &&
+         o.selectedProtocol == ProtocolId::PT2262_TRI_STATE &&
+         o.candidates[0] == ProtocolId::PT2262_TRI_STATE;
+}
+
+bool malformedIsUnknown() {
+  std::array<int16_t, 24U> pulses{};
+  for (size_t i = 0; i < pulses.size(); ++i) {
+    pulses[i] = (i % 2U) == 0U ? static_cast<int16_t>(170U + i)
+                                : neg(250U + i * 7U);
+  }
+  const auto o = protocolEngineObserve(captureFor(pulses));
+  return o.decision == ProtocolEngineDecisionState::UNKNOWN &&
+         o.matchCount == 0U && o.candidateCount == 0U &&
+         o.selectedProtocol == ProtocolId::UNKNOWN;
+}
+
+}  // namespace
+
+int main() {
+  if (!protocolEngineBegin()) return 1;
+  if (!decisionRule()) return 2;
+  if (!evIsKnown()) return 3;
+  if (!ptIsKnown()) return 4;
+  if (!malformedIsUnknown()) return 5;
+  std::puts("Step 29.7 match aggregation tests: PASS");
+  return 0;
+}

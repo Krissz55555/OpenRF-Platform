@@ -1,2 +1,9 @@
 .pio/
 .vscode/
+__pycache__/
+*.py[cod]
+*.elf
+*.map
+*.log
+.DS_Store
+Thumbs.db

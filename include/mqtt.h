@@ -15,3 +15,4 @@ void mqttPublishStatus();
 void mqttPublishDiscovery();
 
 void mqttHandleRFEvent(const RFEventMessage& event);
+void mqttHandleV2Action(const RFEventMessage& event);

@@ -3,7 +3,7 @@
 
 struct RFEventMessage;
 
-constexpr uint8_t OPENRF_RX_SLOT_COUNT = 10;
+constexpr uint8_t OPENRF_RX_SLOT_COUNT = 15;
 
 struct RxSlotInfo {
   uint8_t id = 0;
@@ -17,9 +17,12 @@ struct RxSlotInfo {
   bool matchCode = true;
   uint8_t symbolCount = 0;
   uint16_t pulseLengthUs = 0;
+  float frequencyMHz = 0.0F;
+  uint8_t radioId = 0;
   uint32_t matchCount = 0;
   float lastRssi = -127.0F;
   uint8_t lastQuality = 0;
+  bool sendSupported = false;
 };
 
 void rxSlotsBegin();
@@ -28,15 +31,18 @@ bool rxSlotStartLearn(uint8_t slot, const String& name);
 bool rxSlotDelete(uint8_t slot);
 bool rxSlotRename(uint8_t slot, const String& name);
 bool rxSlotSetEnabled(uint8_t slot, bool enabled);
+bool rxSlotSend(uint8_t slot, uint8_t repeats);
 RxSlotInfo rxSlotGetInfo(uint8_t slot);
 uint8_t rxSlotCountUsed();
 const char* rxSlotLearnState();
+const char* rxSlotLearnSource();
 uint8_t rxSlotLearningId();
 
 void mqttPublishRxSlotEvent(uint8_t slot, const RxSlotInfo& info);
 void mqttPublishDiscovery();
 
 void rxSlotsHandleRFEvent(const RFEventMessage& event);
+void rxSlotsHandleV2Action(const RFEventMessage& event);
 
 uint32_t rxSlotWeakLearnRejectedCount();
 float rxSlotLastWeakLearnRssi();

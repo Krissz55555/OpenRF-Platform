@@ -20,14 +20,38 @@ class AnalyzerGuard {
   }
 };
 
-AnalyzerSnapshot snapshot;
-AnalyzerCandidateSnapshot lastCandidate;
-uint32_t weakRssiFrames = 0;
-float peakRssiDbm = -127.0F;
+AnalyzerSnapshot snapshots[2];
+AnalyzerCandidateSnapshot lastCandidates[2];
+uint32_t weakRssiFrames[2] = {0, 0};
+float peakRssiDbm[2] = {-127.0F, -127.0F};
 
-int16_t* snapshotRawStore = nullptr;
-int16_t* candidateRawStore = nullptr;
-int16_t* candidateNormalizedStore = nullptr;
+int16_t* snapshotRawStore[2] = {nullptr, nullptr};
+int16_t* candidateRawStore[2] = {nullptr, nullptr};
+int16_t* candidateNormalizedStore[2] = {nullptr, nullptr};
+
+const char* v2ProtocolName(ProtocolId protocol) {
+  switch (protocol) {
+    case ProtocolId::EV1527_PRINCETON: return "EV1527 / Princeton";
+    case ProtocolId::PT2262_TRI_STATE: return "PT2262 / Tri-State";
+    case ProtocolId::NVKP01_KINETIC: return "NVKP01 Kinetic";
+    case ProtocolId::HT12E: return "HT12E";
+    default: return "Unknown";
+  }
+}
+
+const char* v2EncodingName(ProtocolId protocol) {
+  switch (protocol) {
+    case ProtocolId::EV1527_PRINCETON: return "OOK PWM";
+    case ProtocolId::PT2262_TRI_STATE: return "Tri-state PWM";
+    case ProtocolId::NVKP01_KINETIC: return "Kinetic OOK";
+    case ProtocolId::HT12E: return "HT12E PWM";
+    default: return "Unknown";
+  }
+}
+
+uint8_t analyzerIndex(uint8_t radioId) {
+  return radioId == 2 ? 1 : 0;
+}
 bool analyzerExternalRam = false;
 size_t analyzerAllocated = 0;
 
@@ -60,7 +84,7 @@ struct RejectedCluster {
   String reason;
 };
 
-RejectedCluster rejectedClusters[REJECT_CLUSTER_COUNT];
+RejectedCluster rejectedClusters[2][REJECT_CLUSTER_COUNT];
 
 uint32_t pulseWidth(int16_t pulse) {
   return static_cast<uint32_t>(abs(static_cast<int32_t>(pulse)));
@@ -208,26 +232,42 @@ String binaryString(uint64_t code, uint8_t bits) {
 }  // namespace
 
 bool analyzerBegin() {
-  if (snapshotRawStore && candidateRawStore && candidateNormalizedStore) return true;
+  bool ready = true;
+  for (uint8_t i = 0; i < 2; ++i) {
+    ready = ready &&
+        snapshotRawStore[i] &&
+        candidateRawStore[i] &&
+        candidateNormalizedStore[i];
+  }
+  if (ready) return true;
 
-  snapshotRawStore = allocateAnalyzerPulseStore();
-  candidateRawStore = allocateAnalyzerPulseStore();
-  candidateNormalizedStore = allocateAnalyzerPulseStore();
-  if (!snapshotRawStore || !candidateRawStore || !candidateNormalizedStore) {
-    Serial.println(F("FATAL: Analyzer pulse-store allocation failed"));
-    return false;
+  for (uint8_t i = 0; i < 2; ++i) {
+    if (!snapshotRawStore[i]) snapshotRawStore[i] = allocateAnalyzerPulseStore();
+    if (!candidateRawStore[i]) candidateRawStore[i] = allocateAnalyzerPulseStore();
+    if (!candidateNormalizedStore[i]) candidateNormalizedStore[i] = allocateAnalyzerPulseStore();
+
+    if (!snapshotRawStore[i] ||
+        !candidateRawStore[i] ||
+        !candidateNormalizedStore[i]) {
+      Serial.println(F("FATAL: Analyzer pulse-store allocation failed"));
+      return false;
+    }
+
+    snapshots[i].rawPulses = snapshotRawStore[i];
+    lastCandidates[i].rawPulses = candidateRawStore[i];
+    lastCandidates[i].normalizedPulses = candidateNormalizedStore[i];
   }
 
-  snapshot.rawPulses = snapshotRawStore;
-  lastCandidate.rawPulses = candidateRawStore;
-  lastCandidate.normalizedPulses = candidateNormalizedStore;
+  analyzerExternalRam = true;
+  for (uint8_t i = 0; i < 2; ++i) {
+    analyzerExternalRam =
+        analyzerExternalRam &&
+        esp_ptr_external_ram(snapshotRawStore[i]) &&
+        esp_ptr_external_ram(candidateRawStore[i]) &&
+        esp_ptr_external_ram(candidateNormalizedStore[i]);
+  }
 
-  analyzerExternalRam =
-      esp_ptr_external_ram(snapshotRawStore) &&
-      esp_ptr_external_ram(candidateRawStore) &&
-      esp_ptr_external_ram(candidateNormalizedStore);
-
-  Serial.print(F("Analyzer pulse stores: "));
+  Serial.print(F("Dual Analyzer pulse stores: "));
   Serial.print(analyzerAllocated);
   Serial.print(F(" bytes, "));
   Serial.println(analyzerExternalRam ? F("PSRAM") : F("internal RAM fallback"));
@@ -239,29 +279,43 @@ bool analyzerUsingExternalRam() { return analyzerExternalRam; }
 
 void analyzerReset() {
   AnalyzerGuard guard;
-  snapshot = AnalyzerSnapshot{};
-  lastCandidate = AnalyzerCandidateSnapshot{};
-  snapshot.rawPulses = snapshotRawStore;
-  lastCandidate.rawPulses = candidateRawStore;
-  lastCandidate.normalizedPulses = candidateNormalizedStore;
-  weakRssiFrames = 0;
-  peakRssiDbm = -127.0F;
-  for (auto& cluster : rejectedClusters) cluster = RejectedCluster{};
+
+  for (uint8_t i = 0; i < 2; ++i) {
+    snapshots[i] = AnalyzerSnapshot{};
+    lastCandidates[i] = AnalyzerCandidateSnapshot{};
+
+    snapshots[i].radioId = i + 1;
+    lastCandidates[i].radioId = i + 1;
+
+    snapshots[i].rawPulses = snapshotRawStore[i];
+    lastCandidates[i].rawPulses = candidateRawStore[i];
+    lastCandidates[i].normalizedPulses = candidateNormalizedStore[i];
+
+    weakRssiFrames[i] = 0;
+    peakRssiDbm[i] = -127.0F;
+
+    for (auto& cluster : rejectedClusters[i]) {
+      cluster = RejectedCluster{};
+    }
+  }
 }
 
 void analyzerRecordCandidate(const int16_t* pulses, uint16_t count, uint32_t durationUs,
-                             float frequencyMHz, float rssiDbm,
+                             float frequencyMHz, uint8_t radioId, float rssiDbm,
                              const String& rejectReason) {
   AnalyzerGuard guard;
+  const uint8_t index = analyzerIndex(radioId);
+  AnalyzerCandidateSnapshot& lastCandidate = lastCandidates[index];
   if (config.analyzerFreezeCandidate && lastCandidate.available) return;
   const uint32_t nextSequence = lastCandidate.sequence + 1;
   lastCandidate = AnalyzerCandidateSnapshot{};
-  lastCandidate.rawPulses = candidateRawStore;
-  lastCandidate.normalizedPulses = candidateNormalizedStore;
+  lastCandidate.rawPulses = candidateRawStore[index];
+  lastCandidate.normalizedPulses = candidateNormalizedStore[index];
   lastCandidate.available = true;
   lastCandidate.sequence = nextSequence;
   lastCandidate.capturedAtMs = millis();
   lastCandidate.frequencyMHz = frequencyMHz;
+  lastCandidate.radioId = radioId;
   lastCandidate.rssiDbm = rssiDbm;
   lastCandidate.pulseCount = count;
   lastCandidate.durationUs = durationUs;
@@ -282,35 +336,44 @@ void analyzerRecordCandidate(const int16_t* pulses, uint16_t count, uint32_t dur
   }
 }
 
-AnalyzerCandidateSnapshot analyzerGetLastCandidate() {
-  AnalyzerGuard guard; return lastCandidate; }
-
-bool analyzerRssiPasses(float rssiDbm) {
+AnalyzerCandidateSnapshot analyzerGetLastCandidate(uint8_t radioId) {
   AnalyzerGuard guard;
-  if (rssiDbm > peakRssiDbm) peakRssiDbm = rssiDbm;
+  return lastCandidates[analyzerIndex(radioId)];
+}
+
+bool analyzerRssiPasses(uint8_t radioId, float rssiDbm) {
+  AnalyzerGuard guard;
+  const uint8_t index = analyzerIndex(radioId);
+  if (rssiDbm > peakRssiDbm[index]) peakRssiDbm[index] = rssiDbm;
   return rssiDbm >= static_cast<float>(config.analyzerMinRssi);
 }
 
-void analyzerRecordWeakRssi(float rssiDbm) {
+void analyzerRecordWeakRssi(uint8_t radioId, float rssiDbm) {
   AnalyzerGuard guard;
-  if (weakRssiFrames < UINT32_MAX) weakRssiFrames++;
-  if (rssiDbm > peakRssiDbm) peakRssiDbm = rssiDbm;
+  const uint8_t index = analyzerIndex(radioId);
+  if (weakRssiFrames[index] < UINT32_MAX) weakRssiFrames[index]++;
+  if (rssiDbm > peakRssiDbm[index]) peakRssiDbm[index] = rssiDbm;
 }
 
 void analyzerProcess(const int16_t* pulses, uint16_t count, uint32_t durationUs,
-                     float frequencyMHz, float rssiDbm, bool accepted,
-                     const String& rejectReason) {
+                     float frequencyMHz, uint8_t radioId, float rssiDbm, bool accepted,
+                     const String& rejectReason,
+                     const ProtocolEngineObservation* v2Observation) {
+  const uint32_t analyzerStartedUs = micros();
   AnalyzerGuard guard;
+  const uint8_t index = analyzerIndex(radioId);
+  AnalyzerSnapshot& snapshot = snapshots[index];
   const uint32_t decodedBefore = snapshot.decodedFrames;
   const uint32_t unknownBefore = snapshot.unknownFrames;
   const uint32_t nextSequence = snapshot.sequence + 1;
 
   snapshot = AnalyzerSnapshot{};
-  snapshot.rawPulses = snapshotRawStore;
+  snapshot.rawPulses = snapshotRawStore[index];
   snapshot.available = true;
   snapshot.sequence = nextSequence;
   snapshot.capturedAtMs = millis();
   snapshot.frequencyMHz = frequencyMHz;
+  snapshot.radioId = radioId;
   snapshot.rssiDbm = rssiDbm;
   snapshot.pulseCount = count;
   snapshot.durationUs = durationUs;
@@ -319,8 +382,8 @@ void analyzerProcess(const int16_t* pulses, uint16_t count, uint32_t durationUs,
   snapshot.rejectReason = rejectReason;
   snapshot.decodedFrames = decodedBefore;
   snapshot.unknownFrames = unknownBefore;
-  snapshot.weakRssiFrames = weakRssiFrames;
-  snapshot.peakRssiDbm = peakRssiDbm;
+  snapshot.weakRssiFrames = weakRssiFrames[index];
+  snapshot.peakRssiDbm = peakRssiDbm[index];
   estimatePulseClasses(pulses, count, snapshot.pulseClasses, snapshot.pulseClassCount);
 
   const uint16_t previewCount = min(count, static_cast<uint16_t>(OPENRF_ANALYZER_RAW_PREVIEW));
@@ -345,41 +408,79 @@ void analyzerProcess(const int16_t* pulses, uint16_t count, uint32_t durationUs,
   if (snapshot.pulseClassCount >= 2 && snapshot.pulseClasses[0])
     snapshot.classRatio = static_cast<float>(snapshot.pulseClasses[1]) / snapshot.pulseClasses[0];
 
-  const DecodedRFEvent decoded = universalDecode(pulses, count);
-  if (decoded.valid) {
-    snapshot.protocol = decoded.protocol;
-    snapshot.encoding = decoded.encoding.length() ? decoded.encoding
-                                                  : (decoded.protocol == "PT2262" ? "Tri-state PWM" : "OOK PWM");
-    snapshot.deviceId = decoded.deviceId;
-    snapshot.command = decoded.command;
-    snapshot.symbolCount = decoded.symbolCount;
-    snapshot.code = decoded.numericCode;
-    snapshot.basePulseUs = decoded.pulseLengthUs;
-    snapshot.frameCount = decoded.repeats;
-    snapshot.quality = decoded.quality;
-    if (decoded.symbolCount <= 64 && decoded.protocol != "PT2262")
-      snapshot.bitstream = binaryString(decoded.numericCode, decoded.symbolCount);
+  const NormalizedRfEvent* const v2Event =
+      v2Observation && v2Observation->normalizedEvent.available
+          ? &v2Observation->normalizedEvent
+          : nullptr;
+  if (v2Event) {
+    snapshot.protocol = v2ProtocolName(v2Event->protocol);
+    snapshot.encoding = v2EncodingName(v2Event->protocol);
+    snapshot.symbolCount = v2Event->symbolCount;
+    snapshot.code = v2Event->code;
+    snapshot.frameCount = v2Event->repeats;
+    if (v2Event->protocol == ProtocolId::EV1527_PRINCETON &&
+        v2Observation->ev1527DiagnosticsAvailable) {
+      snapshot.basePulseUs =
+          v2Observation->ev1527Diagnostics.estimatedBasePulseUs;
+    } else if (v2Event->protocol == ProtocolId::PT2262_TRI_STATE &&
+               v2Observation->pt2262DiagnosticsAvailable) {
+      snapshot.basePulseUs =
+          v2Observation->pt2262Diagnostics.estimatedBasePulseUs;
+    } else if (v2Event->protocol == ProtocolId::HT12E &&
+               v2Observation->ht12eDiagnosticsAvailable) {
+      snapshot.basePulseUs =
+          v2Observation->ht12eDiagnostics.estimatedTUs;
+    }
+    if (v2Event->symbolCount <= 64U &&
+        v2Event->protocol != ProtocolId::PT2262_TRI_STATE) {
+      snapshot.bitstream =
+          binaryString(v2Event->code, v2Event->symbolCount);
+    }
     snapshot.decodedFrames++;
-  } else if (decoded.recognized) {
-    // Structural protocol recognition is visible to Analyzer diagnostics but
-    // deliberately remains non-actionable for RX Slots, MQTT and HA.
-    snapshot.protocol = decoded.protocol;
-    snapshot.encoding = decoded.encoding;
-    snapshot.status = "Recognized / decoding pending";
-    snapshot.structuredSignal = true;
-    snapshot.unknownFrames++;
   } else {
-    snapshot.protocol = "Unknown";
-    snapshot.encoding = snapshot.pulseClassCount >= 2 ? "OOK / PWM candidate" : "Unknown";
-    snapshot.unknownFrames++;
+    const DecodedRFEvent decoded = universalDecode(pulses, count);
+    if (decoded.valid) {
+      snapshot.protocol = decoded.protocol;
+      snapshot.encoding = decoded.encoding.length()
+                              ? decoded.encoding
+                              : (decoded.protocol == "PT2262"
+                                     ? "Tri-state PWM"
+                                     : "OOK PWM");
+      snapshot.deviceId = decoded.deviceId;
+      snapshot.command = decoded.command;
+      snapshot.symbolCount = decoded.symbolCount;
+      snapshot.code = decoded.numericCode;
+      snapshot.basePulseUs = decoded.pulseLengthUs;
+      snapshot.frameCount = decoded.repeats;
+      snapshot.quality = decoded.quality;
+      if (decoded.symbolCount <= 64 && decoded.protocol != "PT2262")
+        snapshot.bitstream =
+            binaryString(decoded.numericCode, decoded.symbolCount);
+      snapshot.decodedFrames++;
+    } else if (decoded.recognized) {
+      // Structural recognition remains visible but non-actionable.
+      snapshot.protocol = decoded.protocol;
+      snapshot.encoding = decoded.encoding;
+      snapshot.status = "Recognized / decoding pending";
+      snapshot.structuredSignal = true;
+      snapshot.unknownFrames++;
+    } else {
+      snapshot.protocol = "Unknown";
+      snapshot.encoding =
+          snapshot.pulseClassCount >= 2 ? "OOK / PWM candidate" : "Unknown";
+      snapshot.unknownFrames++;
+    }
   }
+  snapshot.processingUs = static_cast<uint32_t>(micros() - analyzerStartedUs);
 }
 
 
 bool analyzerConsiderRejected(const int16_t* pulses, uint16_t count, uint32_t durationUs,
-                              float frequencyMHz, float rssiDbm,
+                              float frequencyMHz, uint8_t radioId, float rssiDbm,
                               const String& rejectReason) {
   AnalyzerGuard guard;
+  const uint8_t index = analyzerIndex(radioId);
+  AnalyzerSnapshot& snapshot = snapshots[index];
   uint16_t classes[6] = {0};
   uint8_t classCount = 0;
   AnalyzerCandidateSnapshot metrics;
@@ -396,7 +497,7 @@ bool analyzerConsiderRejected(const int16_t* pulses, uint16_t count, uint32_t du
   uint32_t oldestSeen = UINT32_MAX;
 
   for (uint8_t i = 0; i < REJECT_CLUSTER_COUNT; i++) {
-    RejectedCluster& cluster = rejectedClusters[i];
+    RejectedCluster& cluster = rejectedClusters[index][i];
     if (!cluster.used || static_cast<uint32_t>(now - cluster.lastSeenMs) > STRUCTURED_WINDOW_MS) {
       if (!cluster.used) { replacementIndex = i; oldestSeen = 0; }
       else if (cluster.lastSeenMs < oldestSeen) { replacementIndex = i; oldestSeen = cluster.lastSeenMs; }
@@ -409,14 +510,14 @@ bool analyzerConsiderRejected(const int16_t* pulses, uint16_t count, uint32_t du
 
   RejectedCluster* cluster = nullptr;
   if (bestIndex >= 0 && bestSimilarity >= config.analyzerSimilarity) {
-    cluster = &rejectedClusters[bestIndex];
+    cluster = &rejectedClusters[index][bestIndex];
     if (cluster->occurrences < 255) cluster->occurrences++;
     cluster->pulseCount = static_cast<uint16_t>((cluster->pulseCount * 2UL + analysisCount) / 3UL);
     cluster->durationUs = (cluster->durationUs * 2UL + durationUs) / 3UL;
     for (uint8_t i = 0; i < min(cluster->pulseClassCount, classCount); i++)
       cluster->pulseClasses[i] = static_cast<uint16_t>((cluster->pulseClasses[i] * 2UL + classes[i]) / 3UL);
   } else {
-    cluster = &rejectedClusters[replacementIndex];
+    cluster = &rejectedClusters[index][replacementIndex];
     *cluster = RejectedCluster{};
     cluster->used = true;
     cluster->pulseCount = analysisCount;
@@ -431,7 +532,7 @@ bool analyzerConsiderRejected(const int16_t* pulses, uint16_t count, uint32_t du
 
   if (cluster->occurrences < config.analyzerOccurrences) return false;
 
-  analyzerProcess(pulses, count, durationUs, frequencyMHz, rssiDbm, false, rejectReason);
+  analyzerProcess(pulses, count, durationUs, frequencyMHz, radioId, rssiDbm, false, rejectReason);
   // Preserve a recognition-only Protocol Manager result (for example NVKP01).
   // Only generic unmatched candidates are relabeled as Structured unknown.
   if (snapshot.protocol == "Unknown") {
@@ -445,17 +546,21 @@ bool analyzerConsiderRejected(const int16_t* pulses, uint16_t count, uint32_t du
   return true;
 }
 
-AnalyzerSnapshot analyzerGetSnapshot() {
+AnalyzerSnapshot analyzerGetSnapshot(uint8_t radioId) {
   AnalyzerGuard guard;
-  AnalyzerSnapshot current = snapshot;
-  current.weakRssiFrames = weakRssiFrames;
-  current.peakRssiDbm = peakRssiDbm;
+  const uint8_t index = analyzerIndex(radioId);
+  AnalyzerSnapshot current = snapshots[index];
+  current.weakRssiFrames = weakRssiFrames[index];
+  current.peakRssiDbm = peakRssiDbm[index];
   return current;
 }
 
-
-AnalyzerLiveState analyzerGetLiveState() {
+AnalyzerLiveState analyzerGetLiveState(uint8_t radioId) {
   AnalyzerGuard guard;
+  const uint8_t index = analyzerIndex(radioId);
+  const AnalyzerSnapshot& snapshot = snapshots[index];
+  const AnalyzerCandidateSnapshot& lastCandidate = lastCandidates[index];
+
   AnalyzerLiveState state;
   state.available = snapshot.available;
   state.sequence = snapshot.sequence;
@@ -463,7 +568,7 @@ AnalyzerLiveState analyzerGetLiveState() {
   state.candidateAvailable = lastCandidate.available;
   state.candidateSequence = lastCandidate.sequence;
   state.candidateCapturedAtMs = lastCandidate.capturedAtMs;
-  state.currentPeakRssiDbm = peakRssiDbm;
-  state.weakRssiFrames = weakRssiFrames;
+  state.currentPeakRssiDbm = peakRssiDbm[index];
+  state.weakRssiFrames = weakRssiFrames[index];
   return state;
 }

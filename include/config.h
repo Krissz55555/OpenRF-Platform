@@ -17,6 +17,14 @@ struct AppConfig {
 
   uint8_t replayCount;
   uint16_t radioFrequencyMhz;
+  bool radio1Enabled;
+  bool radio2Enabled;
+  bool loraEnabled;
+  // Persisted CC1101 operating frequencies. Legacy field names are kept in
+  // the config schema for backward compatibility; the RF layer separately
+  // exposes immutable default frequencies.
+  float radio1FrequencyMhz;
+  float radio2FrequencyMhz;
   int8_t rxSlotLearnMinRssi;
 
   int8_t analyzerMinRssi;
