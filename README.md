@@ -189,6 +189,24 @@ The responsive WebUI separates daily operation from detailed diagnostics.
 
 Live indicators expose Core 0, Core 1, PSRAM, and heap usage. Navigation supports desktop layouts and horizontal scrolling on smaller screens.
 
+### Interface preview
+
+<table>
+  <tr>
+    <td width="50%"><img src="assets/webui-rf-slots-beta2.png" alt="Bidirectional RAW RF Slots in OpenRF Platform v2.0.0-beta.2"></td>
+    <td width="50%"><img src="assets/webui-rx-slots-beta2.png" alt="Known-protocol RX Slots in OpenRF Platform v2.0.0-beta.2"></td>
+  </tr>
+  <tr>
+    <td align="center"><strong>Bidirectional RAW RF Slots</strong><br>Saved RAW signals can be transmitted and can match later eligible UNKNOWN receptions.</td>
+    <td align="center"><strong>Known-protocol RX Slots</strong><br>V2 protocol events can be learned and exposed to Home Assistant.</td>
+  </tr>
+</table>
+
+<p align="center">
+  <img src="assets/webui-rf-analyzer-beta2.png" alt="Live RF Analyzer in OpenRF Platform v2.0.0-beta.2" width="760">
+</p>
+<p align="center"><strong>Live RF Analyzer</strong><br>Inspect accepted and rejected captures without stopping normal gateway operation.</p>
+
 ## ESP32-S3 architecture and memory
 
 OpenRF uses RadioLib, PlatformIO, LittleFS, and a dual-core FreeRTOS architecture.
@@ -226,7 +244,7 @@ Use band-appropriate modules and antennas, a suitable power supply, and the wiri
 
 ## Hardware wiring
 
-![OpenRF Platform ESP32-S3 wiring diagram](assets/openrf-platform-wiring.svg)
+![OpenRF Platform ESP32-S3 wiring diagram](assets/openrf-platform-wiring.png)
 
 > **Important:** all RF modules use **3.3 V logic and power**. Do not connect a CC1101 or SX1276 module to 5 V. Connect every module to the same ground as the ESP32-S3.
 
