@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/openrf-platform-logo.svg" alt="OpenRF Platform" width="180">
+</p>
+
 # OpenRF Platform
 
 **Open-source RF gateway and signal-analysis platform for ESP32-S3, dual CC1101 radios, and local Home Assistant integration.**
@@ -219,6 +223,57 @@ The ISR capture limit remains **600 pulses**. Larger non-ISR working buffers sup
 SX1276 detection does not mean LoRa reception, transmission, or gateway integration is available.
 
 Use band-appropriate modules and antennas, a suitable power supply, and the wiring expected by the selected firmware configuration.
+
+## Hardware wiring
+
+![OpenRF Platform ESP32-S3 wiring diagram](assets/openrf-platform-wiring.svg)
+
+> **Important:** all RF modules use **3.3 V logic and power**. Do not connect a CC1101 or SX1276 module to 5 V. Connect every module to the same ground as the ESP32-S3.
+
+### CC1101 shared SPI bus
+
+Both CC1101 modules share the same SPI data and clock lines. Each radio has its own chip-select and interrupt pins.
+
+| CC1101 signal | ESP32-S3 GPIO | Notes |
+| --- | ---: | --- |
+| `MOSI` | GPIO11 | Shared by Radio 1 and Radio 2 |
+| `MISO` | GPIO13 | Shared by Radio 1 and Radio 2 |
+| `SCK` | GPIO12 | Shared by Radio 1 and Radio 2 |
+| `VCC` | 3.3 V | Never connect to 5 V |
+| `GND` | GND | Common ground |
+
+### Radio-specific CC1101 connections
+
+| Signal | Radio 1 — 433 MHz | Radio 2 — 868 MHz |
+| --- | ---: | ---: |
+| `CS / NSS` | GPIO10 | GPIO9 |
+| `GDO0` | GPIO4 | GPIO6 |
+| `GDO2` | GPIO5 | GPIO7 |
+
+### Optional SX1276 / LoRa module
+
+The SX1276 pins below are reserved by the current hardware configuration. In beta.2 the module can be detected, but LoRa RF-engine integration is still pending.
+
+| SX1276 signal | ESP32-S3 GPIO |
+| --- | ---: |
+| `SCK` | GPIO14 |
+| `MOSI` | GPIO15 |
+| `MISO` | GPIO16 |
+| `CS / NSS` | GPIO17 |
+| `RST` | GPIO18 |
+| `DIO0` | GPIO21 |
+| `DIO1` | GPIO2 |
+| `VCC` | 3.3 V |
+| `GND` | GND |
+
+### Reserved I2C pins
+
+| I2C signal | ESP32-S3 GPIO |
+| --- | ---: |
+| `SDA` | GPIO41 |
+| `SCL` | GPIO42 |
+
+Keep SPI and interrupt wires short, add local decoupling close to each RF module, and use an antenna designed for the module's operating band. If only one CC1101 is installed, leave the unused radio disabled on the **System** page.
 
 ## Installation and first start
 

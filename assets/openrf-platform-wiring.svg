@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="930" viewBox="0 0 1400 930" role="img" aria-labelledby="title description">
+  <title id="title">OpenRF Platform ESP32-S3 wiring</title>
+  <desc id="description">GPIO wiring for two CC1101 radios, an optional SX1276 module, and reserved I2C pins.</desc>
+  <defs>
+    <style>
+      .bg { fill: #0d1117; }
+      .panel { fill: #161b22; stroke: #394552; stroke-width: 2; }
+      .main { fill: #13263a; stroke: #2f81f7; stroke-width: 3; }
+      .title { fill: #ffffff; font: 700 32px Arial, sans-serif; }
+      .heading { fill: #ffffff; font: 700 23px Arial, sans-serif; }
+      .text { fill: #c9d1d9; font: 18px Arial, sans-serif; }
+      .small { fill: #9fb2c8; font: 16px Arial, sans-serif; }
+      .pin { fill: #58a6ff; font: 700 18px monospace; }
+      .power { fill: #ff7b72; font: 700 18px monospace; }
+      .ok { fill: #3fb950; font: 700 17px Arial, sans-serif; }
+      .warn { fill: #d29922; font: 700 17px Arial, sans-serif; }
+      .line-blue { stroke: #58a6ff; stroke-width: 4; fill: none; }
+      .line-green { stroke: #3fb950; stroke-width: 4; fill: none; }
+      .line-yellow { stroke: #d29922; stroke-width: 4; fill: none; }
+      .line-red { stroke: #ff7b72; stroke-width: 4; fill: none; }
+    </style>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#58a6ff"/></marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#3fb950"/></marker>
+    <marker id="arrow-yellow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#d29922"/></marker>
+  </defs>
+
+  <rect class="bg" width="1400" height="930" rx="20"/>
+  <text class="title" x="700" y="54" text-anchor="middle">OpenRF Platform — ESP32-S3 N16R8 wiring</text>
+  <text class="small" x="700" y="82" text-anchor="middle">Dual CC1101 radios, optional SX1276 detection, and reserved I2C</text>
+
+  <rect class="main" x="500" y="120" width="400" height="410" rx="20"/>
+  <text class="heading" x="700" y="160" text-anchor="middle">ESP32-S3 N16R8</text>
+  <text class="text" x="540" y="207">Shared CC1101 SPI</text>
+  <text class="pin" x="540" y="238">MOSI  GPIO11</text>
+  <text class="pin" x="540" y="269">MISO  GPIO13</text>
+  <text class="pin" x="540" y="300">SCK   GPIO12</text>
+  <text class="text" x="540" y="346">Radio 1</text>
+  <text class="pin" x="540" y="377">CS GPIO10 · GDO0 GPIO4 · GDO2 GPIO5</text>
+  <text class="text" x="540" y="423">Radio 2</text>
+  <text class="pin" x="540" y="454">CS GPIO9 · GDO0 GPIO6 · GDO2 GPIO7</text>
+  <text class="power" x="540" y="500">3.3 V power · common GND</text>
+
+  <rect class="panel" x="60" y="140" width="350" height="260" rx="18"/>
+  <text class="heading" x="235" y="182" text-anchor="middle">CC1101 — Radio 1</text>
+  <text class="ok" x="235" y="213" text-anchor="middle">433 MHz path</text>
+  <text class="text" x="95" y="253">MOSI / MISO / SCK</text>
+  <text class="pin" x="95" y="286">CS GPIO10</text>
+  <text class="pin" x="95" y="319">GDO0 GPIO4</text>
+  <text class="pin" x="95" y="352">GDO2 GPIO5</text>
+  <text class="power" x="95" y="382">VCC 3.3 V · GND</text>
+
+  <rect class="panel" x="990" y="140" width="350" height="260" rx="18"/>
+  <text class="heading" x="1165" y="182" text-anchor="middle">CC1101 — Radio 2</text>
+  <text class="ok" x="1165" y="213" text-anchor="middle">868 MHz path</text>
+  <text class="text" x="1025" y="253">MOSI / MISO / SCK</text>
+  <text class="pin" x="1025" y="286">CS GPIO9</text>
+  <text class="pin" x="1025" y="319">GDO0 GPIO6</text>
+  <text class="pin" x="1025" y="352">GDO2 GPIO7</text>
+  <text class="power" x="1025" y="382">VCC 3.3 V · GND</text>
+
+  <path class="line-blue" d="M 410 245 L 500 245" marker-end="url(#arrow-blue)"/>
+  <path class="line-green" d="M 410 325 L 465 325 L 465 365 L 500 365" marker-end="url(#arrow-green)"/>
+  <path class="line-blue" d="M 990 245 L 900 245" marker-end="url(#arrow-blue)"/>
+  <path class="line-green" d="M 990 325 L 935 325 L 935 435 L 900 435" marker-end="url(#arrow-green)"/>
+
+  <rect class="panel" x="60" y="585" width="620" height="270" rx="18"/>
+  <text class="heading" x="370" y="627" text-anchor="middle">Optional SX1276 / LoRa module</text>
+  <text class="warn" x="370" y="658" text-anchor="middle">Detection only in beta.2 — RF integration pending</text>
+  <text class="pin" x="100" y="705">SCK  GPIO14</text>
+  <text class="pin" x="100" y="740">MOSI GPIO15</text>
+  <text class="pin" x="100" y="775">MISO GPIO16</text>
+  <text class="pin" x="365" y="705">CS   GPIO17</text>
+  <text class="pin" x="365" y="740">RST  GPIO18</text>
+  <text class="pin" x="365" y="775">DIO0 GPIO21</text>
+  <text class="pin" x="365" y="810">DIO1 GPIO2</text>
+  <text class="power" x="100" y="825">VCC 3.3 V · GND</text>
+
+  <rect class="panel" x="760" y="585" width="580" height="270" rx="18"/>
+  <text class="heading" x="1050" y="627" text-anchor="middle">Reserved I2C and wiring notes</text>
+  <text class="pin" x="805" y="683">SDA GPIO41</text>
+  <text class="pin" x="1065" y="683">SCL GPIO42</text>
+  <text class="text" x="805" y="735">• Keep SPI and interrupt wires short.</text>
+  <text class="text" x="805" y="772">• Add local decoupling at each RF module.</text>
+  <text class="text" x="805" y="809">• Use a band-matched module and antenna.</text>
+
+  <path class="line-yellow" d="M 610 530 L 610 558 L 370 558 L 370 585" marker-end="url(#arrow-yellow)"/>
+  <path class="line-yellow" d="M 790 530 L 790 558 L 1050 558 L 1050 585" marker-end="url(#arrow-yellow)"/>
+
+  <rect x="60" y="881" width="1280" height="34" rx="10" fill="#2d1b1b" stroke="#ff7b72"/>
+  <text class="power" x="700" y="905" text-anchor="middle">3.3 V ONLY — never power CC1101 or SX1276 modules from 5 V</text>
+</svg>
