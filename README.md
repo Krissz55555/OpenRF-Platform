@@ -459,8 +459,8 @@ Created and maintained by **Kocsis Krisztián**, with implementation assistance,
 <!-- OPENRF_STATS_START -->
 ## OpenRF Platform Statistics
 
-- Repository views: **1210**
-- Repository clones: **317**
+- Repository views: **1214**
+- Repository clones: **339**
 - Tracking since: **2026-08-07**
 
 <!-- OPENRF_STATS_END -->
